@@ -1,0 +1,207 @@
+# Design Specification: Anchorage (fstab and mount manager for KDE)
+
+Status: **Agreed except the GUI design.** Items marked **[OPEN]** need the user's decision.
+
+Last updated: 2026-11-22
+
+---
+
+## 1. Goals
+
+- Create, edit, and delete fstab entries through a GUI, with plain-language help.
+- Detect drives, partitions, and filesystems (similar to KDE Partition Manager).
+- Add NFS and SMB network shares, with **every** option exposed and described.
+- Let ordinary users "mount on login" drives and shares they're allowed to use,
+  without admin rights.
+- Integrate with Dolphin (right-click menus) and Plasma's Disks & Devices popup.
+- Security first: only authorised users can change mounts, and there is no path from
+  the app to editing any other system file.
+
+## 2. Platform and stack
+
+| Item | Decision |
+|---|---|
+| Language | C++20 |
+| Frameworks | Qt 6, KDE Frameworks 6, ECM/CMake |
+| Target | Kubuntu 26.04, Plasma 6.6, Dolphin 25.12 |
+| Privileges | KAuth helper (polkit); GUI always runs as the user |
+| GUI toolkit | **[OPEN]**: QtWidgets/KXmlGui (Partition Manager style) vs Kirigami/QML (System Settings style), chosen via mockups |
+| Packaging | `.deb` for Kubuntu; `cmake --install` for development |
+| Name | **Anchorage**: binaries `anchorage`, `anchorage-helper`; config in `/etc/anchorage/`. app ID `io.github.oarko.anchorage`; repo https://github.com/oarko/Anchorage (private) |
+
+## 3. Mounting concepts (background)
+
+- **fstab mounts**: system-wide, done by root/systemd, usually at boot.
+- **UDisks mounts**: what Dolphin does when you click a drive. Dolphin → Solid →
+  UDisks2, which mounts at `/run/media/<user>/<label>` on this system. The base path is
+  fixed when the distro compiles UDisks and is not configurable. If a device has an fstab
+  entry, UDisks uses the fstab mount point and options instead.
+- **"Mount on login"**: per-user. For drives, this is Plasma's Device Automounter setting
+  (`kcm_device_automounter`, config `~/.config/kded_device_automounterrc`). For network
+  shares, the app's own login autostart asks the helper to mount the share.
+
+## 4. Users, groups and permissions
+
+### 4.1 Groups
+
+- **`netmount`** (name chosen by the setup script, default `netmount`): may mount network shares.
+- **`driveadmins`** (name chosen by the setup script, default `driveadmins`):
+  full fstab management, including system entries. **Treat this as root-equivalent**: anyone
+  who can freely edit fstab can gain root. Only add people you'd trust with sudo.
+- **`sudo`**: existing admin group. Has access to everything (via a polkit password prompt).
+
+### 4.2 Permission tiers
+
+Agreed 2026-11-22:
+
+| Tier | Can see | Can do | Authentication |
+|---|---|---|---|
+| Standard user | Non-system entries, drives, network mounts | Own "mount on login" for drives they're permitted to mount | None |
+| `netmount` | Same | + Mount network shares on login (at the user location, §5)<br>+ Create **shared** network mounts under `/mnt/<name>` (fstab entries visible to all users), always `nosuid,nodev` | None for login mounts; **own password** (`auth_self_keep`) for creating `/mnt` fstab entries |
+| `driveadmins` | Everything, including system entries | + Add, edit and delete any fstab entry, including system entries (behind the unlock toggle, §8)<br>+ Mount points anywhere in the safe and override zones (§7)<br>+ Change app settings | Own password (polkit `auth_self_keep`) |
+| `sudo` | Everything | Everything, including hard-blocked paths after typed confirmation | Admin password (polkit `auth_admin_keep`) |
+
+Notes:
+- **Hiding system entries from standard users is cosmetic.** `/etc/fstab` is
+  world-readable by design (the system needs that). The app hides those entries from
+  standard users, but they are not secret.
+- **The GUI is never run with `sudo`.** Running Qt GUIs as root is unsupported on Wayland
+  and unsafe. Sudo users get the same "access to everything" through the polkit password
+  prompt. If started as root, the app shows a message and exits.
+- A member of `sudo` *can* always bypass the app (`sudo nano /etc/fstab`). The app's
+  groups are policy for the app, not a protection against sudoers.
+
+### 4.3 Network share scope
+
+Admin setting per user or group in the Network Share Permissions table:
+- **Approved servers only** (default), or **Any server**.
+- `netmount` is listed by default with "Approved servers only".
+- Anyone not listed needs an admin password to mount network shares.
+- The admin page can add and remove users from `netmount` and `driveadmins`.
+
+### 4.4 Drive mount permission
+
+A `driveadmins`/`sudo` member can grant "Allow user/group to mount this drive without a
+password". The helper writes a polkit rule scoped to that drive's filesystem UUID and the
+named users/groups, in its own fixed file (see §6). This is needed because Ubuntu requires
+admin authentication for mounting *internal* drives via UDisks.
+
+## 5. Mount locations
+
+- **User network mounts (login)**: default to the **auto-detected UDisks base**
+  (`/run/media/<user>/<share>` on this system). Detection: look at existing UDisks mounts
+  in `/run/mount/utab`, then which of `/run/media/<user>` or `/media/<user>` exists.
+- An admin setting overrides the detected location. The helper only accepts locations on
+  the admin-approved list.
+- **Shared network mounts (`netmount`)**: `/mnt/<name>`, one level deep only.
+
+## 6. Privileged helper (KAuth)
+
+The helper runs as root and has a fixed action set. Every action is a separate polkit
+action, so permissions can be tiered:
+
+| Action | Purpose |
+|---|---|
+| `fstab.write` | Replace fstab content (validated, backed up, atomic) |
+| `fstab.restore` | Restore a named backup from the fixed backup directory |
+| `mountpoint.create` | Create a mount-point directory (zone rules, §7) |
+| `mount.entry` / `unmount.entry` | Mount or unmount an fstab entry by its mount point |
+| `mount.usershare` | Mount an approved network share for the calling user (login mounts) |
+| `credentials.write` | Write a root-only SMB credentials file for boot mounts |
+| `polkit.drive-rule` | Add or remove a generated drive-mount rule (UUID + users/groups) |
+| `settings.write` | Write the app's root-owned config (locations, permissions, blocklist is read-only) |
+| `group.membership` | Add or remove a user from `netmount`/`driveadmins` only |
+| `systemd.reload` | `systemctl daemon-reload` after fstab changes |
+
+Fixed paths (compile-time constants): `/etc/fstab`, `/etc/anchorage/backups/`,
+`/etc/anchorage/credentials/`, `/etc/anchorage/config`, `/etc/anchorage/blocked-paths`,
+`/etc/polkit-1/rules.d/60-anchorage.rules`.
+
+See `CLAUDE.md` "Security rules" for implementation constraints.
+
+## 7. Mount-point zones
+
+| Zone | Paths | Who | Rule |
+|---|---|---|---|
+| Safe | `/mnt`, `/media`, `/srv`, `/home/*`, the UDisks base | Any tier allowed to create that kind of mount | Created if missing |
+| Override | Anywhere else, e.g. `/etc/someapp`, `/var/lib/plex` | `driveadmins`, `sudo` | **Target must be an empty directory, or a new one.** Warning shown, and suggests `nofail,_netdev,x-systemd.automount` for network mounts |
+| Hard-blocked | `/`, the top-level dirs themselves (`/etc`, `/usr`, `/var`, `/boot`, `/proc`, `/sys`, `/dev`, `/run`, `/root`, `/tmp`, `/bin`, `/sbin`, `/lib*`), plus `/etc/sudoers.d`, `/etc/pam.d`, `/etc/polkit-1`, `/etc/systemd`, `/etc/ssh`, `/usr/*`, `/var/lib/dpkg` | Nobody via the app, except `sudo` after typing the path to confirm | List lives in root-only `/etc/anchorage/blocked-paths`, editable only by hand |
+
+General rules for every zone:
+- Absolute, normalised paths only. No `..`, no symlinks anywhere in the path.
+- Mounting onto a non-empty directory always warns, because it hides the existing files.
+
+## 8. fstab editing
+
+- Preserve comments, blank lines, ordering, and column alignment on round-trip.
+- **System entries** (`/`, `/boot`, `/boot/efi`, `/home`, swap, plus anything mounted at a
+  top-level system dir) are hidden from standard users. For `driveadmins`/`sudo` they are
+  shown read-only with a shield icon, until "Allow editing system entries" is switched on.
+  A red warning banner shows while it's on.
+- Entry editor:
+  - **Basic**: device/share, mount point, filesystem type.
+  - **Access** (plain language), showing the options each choice generates:
+    - *When it mounts*: at boot / when clicked (`noauto`) / when the folder is opened (`x-systemd.automount`)
+    - *Who can mount*: admins only / any user (`user`) / any user, anyone unmounts (`users`)
+    - *Who owns the files*: user picker → `uid`/`gid`/`umask` (FAT/NTFS/exFAT/SMB only)
+    - *Boot safety*: `nofail`, `_netdev`
+  - **Advanced**: every option for the filesystem type with description, default, and
+    valid values, including rarely used SMB/NFS options.
+- Drives are identified by `UUID=` by default (with an option for `LABEL=`/`PARTUUID=`/path).
+
+## 9. Save safety
+
+| Feature | Default | Notes |
+|---|---|---|
+| Timestamped backup | **On** | Keep the last N (setting); "Restore backup" menu |
+| Validate before writing | **On** | Own checks + `findmnt --verify` |
+| Test mount + undo offer | **On** | After saving: `daemon-reload`, mount the new/changed entries, offer to restore on failure |
+| Preview changes | **Off** | "Preview…" button always available; admin setting forces it on for everyone |
+
+## 10. Drives
+
+- Detect disks/partitions/filesystems via Solid + libblkid: model, size, filesystem,
+  label, UUID, current mount, whether it's in fstab.
+- Per-drive status line, e.g. *"Lingames: users may mount ✓ · mounts on login for oarko ✓ · not in fstab"*.
+- Actions:
+  - **User**: Mount on login / stop.
+  - **Admin**: Add to fstab (mount on boot), Allow users to mount without password.
+
+## 11. Network shares
+
+- **Discovery**: mDNS/Avahi (KDNSSD: `_smb._tcp`, `_nfs._tcp`) and WS-Discovery for
+  Windows/Samba hosts, plus manual address entry.
+- **Share listing**:
+  - NFS: export list from mountd, with a fallback for NFSv4-only servers.
+  - SMB: libsmbclient (prompts for credentials when the server requires them).
+- **Actions per share**: Mount on login (user) · Shared mount in `/mnt` (`netmount`) ·
+  Mount on boot / add to fstab (admin).
+- **SMB credentials**:
+  - Login mounts: KWallet.
+  - Boot mounts: root-only `/etc/anchorage/credentials/<id>` files, referenced via `credentials=`.
+- **`cifs-utils` missing**: detect it and offer to install it (PackageKit).
+- **Option catalogue**: data file listing every `mount.cifs(8)` and `nfs(5)` option with
+  description, type, default, valid values, and NFS version/SMB dialect applicability.
+
+## 12. Desktop integration
+
+- **Dolphin service menus** (`.desktop` files in `kio/servicemenus`):
+  - On `smb://` / `nfs://` share folders: "Mount on login…", "Add to fstab…"
+  - On mounted drive folders: "Mount on login", "Add to fstab…"
+  - On empty space in Network view: "Connect network share…"
+  - Each opens the app's dialog pre-filled.
+- **Limitation**: Dolphin's sidebar Devices section can't have custom menu items.
+  Drive actions are offered instead via a **Plasma Disks & Devices (Solid) action**.
+- **Login autostart**: a small user agent that mounts the user's network login mounts
+  via the helper (`mount.usershare`), using KWallet credentials.
+
+## 13. Repository
+
+- Git repository, to be hosted on GitHub. GitHub Actions CI will run the build, unit tests,
+  clang-tidy/cppcheck, and short fuzzing runs on each push and PR, plus a scheduled weekly
+  longer fuzz run.
+
+## 14. Open items
+
+1. **GUI toolkit and layout.** Produce 3–4 mockups (at least one QtWidgets/Partition
+   Manager style, one Kirigami/System Settings style) for the user to choose from.
