@@ -72,6 +72,20 @@ These come from the user's requirements and apply to every change:
 
 ## Testing
 
+**Never touch the real `/etc/fstab` or host mounts in tests.** Use proxy fstab files:
+- The fstab library reads and writes any path; tests use files in `tests/data/` and temp copies.
+- Helper logic lives in a library function that takes its paths as parameters. Tests call
+  it with a temp directory. The shipped KAuth helper only passes the compile-time
+  constants, so there is no test switch in the release binary.
+- Check proxy files with the real tools, no root needed (both verified on this machine):
+  `findmnt --verify --tab-file <file>` and
+  `SYSTEMD_FSTAB=<file> /usr/lib/systemd/system-generators/systemd-fstab-generator <out> <out> <out>`
+  (shows the mount/automount units systemd would create).
+- Real mount tests run in a throwaway privileged Docker container with
+  `mount -T <proxy fstab> -a` (tmpfs, bind, loop images of ext4/btrfs/vfat/exfat, plus
+  Samba and NFS server containers). Unprivileged user namespaces don't work here: Ubuntu
+  sets `kernel.apparmor_restrict_unprivileged_userns=1`.
+
 - Unit tests (QtTest) for the fstab parser/writer, especially round-trip preservation
   of comments, blank lines, and spacing.
 - Privilege-boundary tests: path traversal (`..`), symlink swaps, injected newlines and
