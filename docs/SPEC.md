@@ -1,6 +1,6 @@
 # Design Specification: Anchorage (fstab and mount manager for KDE)
 
-Status: **Agreed except the GUI design.** Items marked **[OPEN]** need the user's decision.
+Status: **Agreed.** Items marked **[OPEN]** need the user's decision.
 
 Last updated: 2026-11-22
 
@@ -25,7 +25,7 @@ Last updated: 2026-11-22
 | Frameworks | Qt 6, KDE Frameworks 6, ECM/CMake |
 | Target | Kubuntu 26.04, Plasma 6.6, Dolphin 25.12 |
 | Privileges | KAuth helper (polkit); GUI always runs as the user |
-| GUI toolkit | **[OPEN]**: QtWidgets/KXmlGui (Partition Manager style) vs Kirigami/QML (System Settings style), chosen via mockups |
+| GUI toolkit | **QtWidgets/KXmlGui**, layout **C (Dolphin-like)**, see §15 |
 | Packaging | `.deb` for Kubuntu; `cmake --install` for development |
 | Name | **Anchorage**: binaries `anchorage`, `anchorage-helper`; config in `/etc/anchorage/`. app ID `io.github.oarko.anchorage`; repo https://github.com/oarko/Anchorage (private) |
 
@@ -203,5 +203,91 @@ General rules for every zone:
 
 ## 14. Open items
 
-1. **GUI toolkit and layout.** Produce 3–4 mockups (at least one QtWidgets/Partition
-   Manager style, one Kirigami/System Settings style) for the user to choose from.
+1. None. Phase 2 sharing (§16) is agreed but scheduled after v1.
+
+## 15. GUI layout (chosen 2026-11-22: layout C, Dolphin-like)
+
+- Main window: toolbar (breadcrumb, search, "Connect to server…", "New fstab entry"),
+  **Places** panel on the left (Views: All Mounts / Drives / Network Shares / System;
+  Network: discovered + manually added servers, "Add server…"; Admin: Backups, Settings),
+  **tile grid** in the centre (icon, name, type, mount point, usage bar, status chips),
+  **info panel** on the right split into "For me" and "Administrator" actions.
+- Right-click on any tile shows the same menu Dolphin's service menu offers.
+- Selecting a server lists its shares as folder tiles; a share offers Mount on login /
+  Shared in /mnt / Mount on boot.
+- Pending fstab changes show an Apply bar (Discard / Preview… / Apply).
+- System entries: hidden for standard users; locked banner + "Allow editing system
+  entries" for driveadmins/sudo.
+- Entry editor dialog with Basic / Access / Advanced tabs and a live fstab-line preview.
+- Reference prototype (behaviour, not pixel-exact): https://claude.ai/artifact/SnKURj5AnLo3vmpDNNZVKV
+  (private) and mockups https://claude.ai/artifact/S53zCX8hpRJzGid3bipqFg.
+- Possible later addition: a list/details view toggle (B-style rows), like Dolphin's view modes.
+
+## 16. Phase 2 (planned, not in v1): sharing folders (SMB and NFS)
+
+Agreed 2026-11-22. Principle: **integrate with existing tools, don't reinvent them.**
+
+### 16.1 Facts found on the dev machine
+- `samba` (the server) is not installed; `samba-common-bin` is.
+- `kdenetwork-filesharing` is installed: Dolphin's folder Properties has a **Share** tab
+  that creates Samba *usershares*.
+- Usershares are currently disabled (`/var/lib/samba/usershares` is created by the
+  `samba` package). The `sambashare` group exists; `oarko` is a member.
+- Ubuntu's default `smb.conf` sets `usershare allow guests = yes`.
+- `ufw` is installed; `nfs-kernel-server` is not.
+
+### 16.2 SMB shares: both kinds, tiered
+
+| | Usershares | System shares |
+|---|---|---|
+| Who | Members of **`sambashare`** (Samba's own group, reused) | `driveadmins` / `sudo` |
+| What | Folders the user owns | Any folder, subject to the path rules below |
+| How | `net usershare add/delete/info`, run **as the user** (no helper, no root) | Helper writes its own file `/etc/samba/anchorage.conf` and makes sure `smb.conf` has one `include = /etc/samba/anchorage.conf` line; then `smbcontrol smbd reload-config` |
+| Shared with Dolphin | **Yes**: the same usershares appear in Dolphin's Share tab and in Anchorage | — |
+
+- Every share-option field gets a description, as with mount options (read only, guest
+  OK, valid users, browseable, ACLs, etc.).
+- **Samba passwords**: Samba keeps its own password list. Anchorage lets a user set their
+  own Samba password (helper action, password passed on stdin to `smbpasswd -s`, never
+  logged). driveadmins/sudo can set or disable other users' Samba passwords.
+- **Guest access**: admin setting, **off by default**. Off means the helper sets
+  `usershare allow guests = no` and refuses `guest ok = yes` on system shares (this
+  overrides Ubuntu's default of yes).
+- **Path rules for system shares**: absolute, normalised, no symlinks; never `/`, `/etc`,
+  `/root`, `/boot`, `/proc`, `/sys`, `/dev`, `/run`, `/usr`, `/var/lib`, or another
+  user's home folder without a typed confirmation (sudo only).
+
+### 16.3 NFS exports (same treatment as SMB system shares)
+- driveadmins / sudo only. The helper writes its own file
+  `/etc/exports.d/anchorage.exports`, then runs `exportfs -ra`.
+- Every export option with a description (`rw`/`ro`, `sync`/`async`, `root_squash`/
+  `no_root_squash`, `all_squash`, `anonuid`/`anongid`, `subtree_check`, `sec=`, `fsid=`…).
+- A client restriction is required (host, subnet, or `*` only after a warning).
+  `no_root_squash` needs a warning and a typed confirmation, because it gives the client's
+  root user root access to the exported files.
+
+### 16.4 Firewall
+- If `ufw` is active, offer to allow Samba (`ufw allow from <local subnet> to any app Samba`)
+  and/or NFS for the **local subnet only**. Never open to the internet. Shown as a
+  suggestion when the first share is created; also in Settings.
+
+### 16.5 Optional components (also applies to `cifs-utils`)
+- The **setup script** asks whether to install each optional component: `cifs-utils`
+  (mount SMB), `samba` (share over SMB), `nfs-kernel-server` (share over NFS).
+- **Settings → Optional components** lists them with Install buttons (via PackageKit,
+  which handles its own authorisation).
+- **If a component is missing, its features are hidden** (not shown greyed out). Settings
+  explains how to enable them.
+
+### 16.6 Additional helper actions (phase 2)
+`samba.share.write` (own include file only), `samba.password` (self, or others for
+admins), `samba.guest` (global guest setting), `nfs.exports.write` (own exports file only),
+`firewall.allow` (fixed ufw profiles, local subnet only). Each is a separate polkit action
+with tests and fuzz targets, per the security rules in `CLAUDE.md`.
+
+### 16.7 UI (layout C)
+- Places gets a **Sharing** view (only when `samba` or `nfs-kernel-server` is installed):
+  My shares (usershares), System shares, NFS exports. Same tiles + info panel pattern.
+- Dolphin: the existing Share tab stays as is. Anchorage adds "Share this folder…" to its
+  service-menu submenu, which opens the share editor pre-filled.
+- Nice to have: show who is connected (`smbstatus`), read-only.

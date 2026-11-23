@@ -10,10 +10,9 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
 
 ## Project status
 
-- Design phase. **No code has been written yet.**
-- Next step: produce several GUI mockups for the user to compare (see SPEC §12).
-  Do not start implementation until the user has picked a GUI design and signed off
-  on the spec.
+- Design agreed: layout C (Dolphin-like, QtWidgets), see SPEC §15. **No code has been written yet.**
+- SMB share *creation* is a planned phase 2 feature (SPEC §16); keep v1 scope to mounting.
+- Ask the user before starting implementation.
 
 ## Working with the user
 
@@ -32,7 +31,7 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
 - Privileged work goes through a **KAuth helper** (polkit-backed). The GUI never runs
   as root and should refuse to start as root, with a message explaining how to use it.
 - Key libraries: KAuth, Solid, KIO, KWallet, KDNSSD, libsmbclient, libmount, libblkid.
-- GUI toolkit (QtWidgets/KXmlGui vs Kirigami/QML) is **[OPEN]**, decided by the mockups.
+- GUI toolkit: QtWidgets/KXmlGui (layout C, Dolphin-like).
 
 Expected build dependencies (verify package names with `apt-cache policy` before
 relying on them): `extra-cmake-modules qt6-base-dev libkf6auth-dev libkf6kio-dev
