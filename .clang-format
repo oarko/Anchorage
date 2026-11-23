@@ -1,0 +1,10 @@
+# Close to KDE Frameworks style.
+BasedOnStyle: WebKit
+ColumnLimit: 120
+IndentWidth: 4
+BreakBeforeBraces: Linux
+NamespaceIndentation: None
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: Inline
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve

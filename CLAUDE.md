@@ -96,6 +96,11 @@ These come from the user's requirements and apply to every change:
 - The user wants **periodic security testing**. When asked, or after any change to the
   helper or validation code, run the fuzzers and a security review of the diff.
 
+## License
+
+GPL-3.0-or-later (chosen 2026-11-22). Every source file starts with
+`// SPDX-License-Identifier: GPL-3.0-or-later`.
+
 ## Naming
 
 Keep the app name, reverse-DNS ID, polkit action prefix, binary names, and config paths

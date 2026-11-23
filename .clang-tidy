@@ -1,0 +1,18 @@
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  cert-*,
+  clang-analyzer-*,
+  cppcoreguidelines-pro-bounds-*,
+  cppcoreguidelines-pro-type-cstyle-cast,
+  misc-*,
+  -misc-include-cleaner,
+  -misc-const-correctness,
+  -misc-non-private-member-variables-in-classes,
+  performance-*,
+  readability-container-size-empty,
+  readability-redundant-*
+ExtraArgs: ['-Wno-unknown-warning-option']   # compile_commands.json comes from GCC
+WarningsAsErrors: ''
+HeaderFilterRegex: 'src/.*'

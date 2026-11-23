@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=@APP_NAME@
+GenericName=Mount Manager
+Comment=Manage drives, network shares and /etc/fstab
+Exec=@APP_BINARY@
+Icon=drive-harddisk
+Categories=Qt;KDE;System;Settings;
+Keywords=fstab;mount;nfs;smb;samba;cifs;drive;share;
