@@ -375,7 +375,8 @@ private Q_SLOTS:
         File f = File::parse(QByteArray());
         QVERIFY(f.append({QStringLiteral("nas.local:/export/media"), QStringLiteral("/mnt/media"), QStringLiteral("nfs4"),
                           {QStringLiteral("_netdev"), QStringLiteral("nofail"), QStringLiteral("noauto"), QStringLiteral("x-systemd.automount")}, 0, 0}) >= 0);
-        QVERIFY(f.append({QStringLiteral("/dev/disk/by-label/Lingames"), QStringLiteral("/mnt/lin games"), QStringLiteral("btrfs"),
+        // A network source: inside containers systemd skips /dev/... sources (read-only /sys).
+        QVERIFY(f.append({QStringLiteral("nas.local:/export/lin games"), QStringLiteral("/mnt/lin games"), QStringLiteral("nfs4"),
                           {QStringLiteral("nofail")}, 0, 0}) >= 0);
         QTemporaryDir dir;
         const QString fstabPath = dir.filePath(QStringLiteral("fstab"));
