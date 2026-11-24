@@ -97,27 +97,44 @@ admin authentication for mounting *internal* drives via UDisks.
 
 ## 6. Privileged helper (KAuth)
 
-The helper runs as root and has a fixed action set. Every action is a separate polkit
-action, so permissions can be tiered:
+Implemented in `src/helper/helper.cpp` (thin) and `src/core/` (all rules, unit-tested and
+fuzzed). The helper finds out who the caller is from KAuth's caller UID and the system
+group database; nothing the GUI says about the user is trusted.
 
-| Action | Purpose |
-|---|---|
-| `fstab.write` | Replace fstab content (validated, backed up, atomic) |
-| `fstab.restore` | Restore a named backup from the fixed backup directory |
-| `mountpoint.create` | Create a mount-point directory (zone rules, §7) |
-| `mount.entry` / `unmount.entry` | Mount or unmount an fstab entry by its mount point |
-| `mount.usershare` | Mount an approved network share for the calling user (login mounts) |
-| `credentials.write` | Write a root-only SMB credentials file for boot mounts |
-| `polkit.drive-rule` | Add or remove a generated drive-mount rule (UUID + users/groups) |
-| `settings.write` | Write the app's root-owned config (locations, permissions, blocklist is read-only) |
-| `group.membership` | Add or remove a user from `netmount`/`driveadmins` only |
-| `systemd.reload` | `systemctl daemon-reload` after fstab changes |
+| Action (`io.github.oarko.anchorage.*`) | Purpose | Default polkit | Group rule |
+|---|---|---|---|
+| `writefstab` | Replace fstab: checked against the caller's rights, backed up, atomic; can create new mount-point folders; runs `systemctl daemon-reload` | admin password | driveadmins: own password |
+| `restorebackup` | Restore a named backup; goes through the same checks as `writefstab` | admin password | driveadmins: own password |
+| `addsharedmount` | Add one shared network mount in `/mnt/<name>` | admin password | netmount, driveadmins: own password |
+| `removesharedmount` | Remove one shared network mount | admin password | netmount, driveadmins: own password |
 
-Fixed paths (compile-time constants): `/etc/fstab`, `/etc/anchorage/backups/`,
-`/etc/anchorage/credentials/`, `/etc/anchorage/config`, `/etc/anchorage/blocked-paths`,
-`/etc/polkit-1/rules.d/60-anchorage.rules`.
+How `writefstab` decides (`policy::planFstabWrite`):
+- The GUI sends the whole new file plus the SHA-256 of the version it edited. If the file
+  changed meanwhile, the write is refused (no lost updates). A lock file serialises writers.
+- Only the differences are checked. New lines that don't parse are refused; broken lines
+  that were already there may stay.
+- System entries (/, /boot…, /home, /usr…, /var…, /tmp, swap): only driveadmins/sudo may
+  add, change or remove them.
+- New mount points: safe zone for anyone authorised; override zone for driveadmins/sudo
+  (folder must be empty or new); blocked zone for sudo with `confirmProtected` only.
+- Everyone else who passes polkit (a standard user with an admin's password) can change
+  non-system entries in the safe zone.
 
-See `CLAUDE.md` "Security rules" for implementation constraints.
+Shared mounts (`policy::planSharedMount`): network type only; `/mnt/<one folder>`; options
+from an allow-list only; `uid`/`gid` only the caller's own; `credentials=` only the caller's
+own files (`/etc/anchorage/credentials/<user>-*`), so nobody can send another user's saved
+password to a server they control; `nosuid,nodev,nofail,_netdev` always added. Removal is
+only for entries that look like shared mounts.
+
+Mount points: `/etc/anchorage/blocked-paths` can only **add** protected locations; the
+built-in list always applies.
+
+Fixed paths (compile-time constants): `/etc/fstab`, `/etc/anchorage/` (lock file,
+`blocked-paths`), `/etc/anchorage/backups/` (newest 10 kept), `/etc/anchorage/credentials/`.
+Polkit group rule installed to `/usr/share/polkit-1/rules.d/60-anchorage-groups.rules`.
+
+Not yet implemented: mount/unmount, login mounts (`mount.usershare`), credentials files,
+drive polkit rules, settings, group membership (later milestones).
 
 ## 7. Mount-point zones
 

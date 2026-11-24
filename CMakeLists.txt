@@ -11,6 +11,9 @@ set(APP_BINARY      "anchorage")
 set(APP_HELPER      "anchorage-helper")
 set(APP_ID          "io.github.oarko.anchorage")
 set(APP_CONFIG_DIR  "/etc/anchorage")
+# Group names (the setup script will let the admin choose them).
+set(DRIVEADMIN_GROUP "driveadmins" CACHE STRING "Group allowed full fstab management")
+set(NETMOUNT_GROUP   "netmount"    CACHE STRING "Group allowed to mount network shares")
 
 project(Anchorage VERSION 0.1.0 LANGUAGES CXX)
 
@@ -48,8 +51,9 @@ find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS
     I18n
     XmlGui
     WidgetsAddons
+    Auth
 )
-# Later phases add: Auth (helper), Solid, KIO, Wallet, DNSSD, libmount/libblkid, libsmbclient.
+# Later phases add: Solid, KIO, Wallet, DNSSD, libmount/libblkid, libsmbclient.
 
 configure_file(src/config-anchorage.h.in ${CMAKE_BINARY_DIR}/src/config-anchorage.h)
 

@@ -201,18 +201,18 @@ QByteArray formatEntry(const Entry &entry, const Line *layout)
     for (int i = 0; i < count; ++i) {
         const std::size_t idx = static_cast<std::size_t>(i);
         if (hasLayout && i < layout->fieldCount) {
-            const QByteArray &sep = layout->separators[idx];
+            const QByteArray &sep = layout->separators.at(idx);
             if (i == 0 || sep.contains('\t')) {
                 out.append(sep); // indentation, or tab-separated columns: reuse as-is
             } else {
                 // Space-aligned columns: pad to where this field started originally.
-                const qsizetype target = layout->columns[idx];
+                const qsizetype target = layout->columns.at(idx);
                 out.append(QByteArray(std::max<qsizetype>(1, target - out.size()), ' '));
             }
         } else if (i > 0) {
             out.append(hasLayout ? QByteArrayLiteral(" ") : QByteArrayLiteral("  "));
         }
-        out.append(fields[idx]);
+        out.append(fields.at(idx));
     }
     if (hasLayout && count == 6 && layout->fieldCount == 6) {
         out.append(layout->trailing);
@@ -262,9 +262,9 @@ Line parseLine(QByteArrayView raw)
             ++pos;
         }
         const std::size_t idx = static_cast<std::size_t>(count);
-        line.separators[idx] = raw.sliced(sepStart, start - sepStart).toByteArray();
-        line.columns[idx] = start;
-        fields[idx] = raw.sliced(start, pos - start);
+        line.separators.at(idx) = raw.sliced(sepStart, start - sepStart).toByteArray();
+        line.columns.at(idx) = start;
+        fields.at(idx) = raw.sliced(start, pos - start);
         ++count;
     }
 
@@ -281,9 +281,9 @@ Line parseLine(QByteArrayView raw)
     line.fieldCount = count;
 
     Entry e;
-    const auto spec = decodeField(fields[0]);
-    const auto mountPoint = decodeField(fields[1]);
-    const auto type = decodeField(fields[2]);
+    const auto spec = decodeField(fields.at(0));
+    const auto mountPoint = decodeField(fields.at(1));
+    const auto type = decodeField(fields.at(2));
     if (!spec || !mountPoint || !type) {
         return invalid(QStringLiteral("The line is not valid UTF-8 text."));
     }
@@ -292,7 +292,7 @@ Line parseLine(QByteArrayView raw)
     e.type = *type;
 
     if (count >= 4) {
-        const auto opts = decodeField(fields[3]);
+        const auto opts = decodeField(fields.at(3));
         if (!opts) {
             return invalid(QStringLiteral("The options are not valid UTF-8 text."));
         }
@@ -301,14 +301,14 @@ Line parseLine(QByteArrayView raw)
         }
     }
     if (count >= 5) {
-        const auto dump = parseNumber(fields[4]);
+        const auto dump = parseNumber(fields.at(4));
         if (!dump) {
             return invalid(QStringLiteral("The 5th field (dump) must be a number."));
         }
         e.dump = *dump;
     }
     if (count >= 6) {
-        const auto pass = parseNumber(fields[5]);
+        const auto pass = parseNumber(fields.at(5));
         if (!pass) {
             return invalid(QStringLiteral("The 6th field (check order) must be a number."));
         }
@@ -389,7 +389,8 @@ std::vector<int> File::entryLines() const
 int File::findMountPoint(const QString &mountPoint) const
 {
     for (const int i : entryLines()) {
-        if (m_lines[static_cast<std::size_t>(i)].entry->mountPoint == mountPoint) {
+        const auto &entry = m_lines.at(static_cast<std::size_t>(i)).entry;
+        if (entry && entry->mountPoint == mountPoint) {
             return i;
         }
     }
@@ -442,8 +443,8 @@ int File::append(const Entry &entry, QList<Issue> *issues)
         hint.fieldCount = 6; // new entries always get all six fields
         hint.trailing.clear();
         for (std::size_t i = static_cast<std::size_t>(layout->fieldCount); i < 6; ++i) {
-            hint.separators[i] = QByteArrayLiteral(" ");
-            hint.columns[i] = 0;
+            hint.separators.at(i) = QByteArrayLiteral(" ");
+            hint.columns.at(i) = 0;
         }
     }
     auto line = renderChecked(entry, layout ? &hint : nullptr, issues);

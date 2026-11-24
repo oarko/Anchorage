@@ -28,7 +28,7 @@ namespace anchorage::fstab
 {
 
 // Largest fstab file we accept from disk (real ones are a few KiB).
-inline constexpr qsizetype maxFileSize = 1024 * 1024;
+inline constexpr qsizetype maxFileSize = qsizetype(1024) * 1024;
 // Longest line we will write.
 inline constexpr qsizetype maxLineLength = 4096;
 

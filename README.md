@@ -9,7 +9,7 @@ See [`docs/SPEC.md`](docs/SPEC.md) for the agreed design.
 
 ```sh
 sudo apt install build-essential cmake ninja-build extra-cmake-modules qt6-base-dev qt6-tools-dev \
-  libkf6coreaddons-dev libkf6i18n-dev libkf6xmlgui-dev libkf6widgetsaddons-dev
+  libkf6coreaddons-dev libkf6i18n-dev libkf6xmlgui-dev libkf6widgetsaddons-dev libkf6auth-dev
 ```
 
 The full list for later phases (KAuth helper, drives, network shares, fuzzing) is in `CLAUDE.md`.

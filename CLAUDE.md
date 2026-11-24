@@ -85,8 +85,13 @@ These come from the user's requirements and apply to every change:
   when a tab file has an unparseable line. Never rely on its exit code: our parser checks
   first, and only findmnt's messages are used (see `tests/fstabtest.cpp`).
 - Fuzzing: `cmake --preset fuzz && cmake --build --preset fuzz`, then
-  `build/fuzz/bin/fstab_fuzzer -max_total_time=300 -max_len=8192 build/fuzz/corpus tests/data`.
-  CI runs it for 2 minutes on every push.
+  `build/fuzz/bin/fstab_fuzzer -max_total_time=300 -max_len=8192 build/fuzz/corpus tests/data` and
+  `build/fuzz/bin/policy_fuzzer -max_total_time=300 -max_len=4096 build/fuzz/corpus-policy fuzz/seeds/policy`.
+  CI runs each for 1 minute on every push. Keep any crash input that turned out to be a
+  harness mistake as a regression seed in `fuzz/seeds/`.
+- Not yet covered: code paths that only run as root (fchown of new folders/files) and the
+  real KAuth/polkit round trip. Plan: run the test suite as root inside Docker, and an
+  end-to-end helper test in a VM or container with polkit.
 - Real mount tests run in a throwaway privileged Docker container with
   `mount -T <proxy fstab> -a` (tmpfs, bind, loop images of ext4/btrfs/vfat/exfat, plus
   Samba and NFS server containers). Unprivileged user namespaces don't work here: Ubuntu

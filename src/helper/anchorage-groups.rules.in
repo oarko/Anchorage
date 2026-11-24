@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Lets Anchorage's groups authenticate with their own password (SPEC §4.2).
+// Everyone else keeps the default from the .actions file (an administrator's password).
+// The helper still checks every request against the caller's groups itself.
+polkit.addRule(function (action, subject) {
+    var prefix = "@APP_ID@.";
+    if (action.id.indexOf(prefix) !== 0 || !subject.local || !subject.active) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var name = action.id.substring(prefix.length);
+    var shared = (name === "addsharedmount" || name === "removesharedmount");
+    var full = shared || name === "writefstab" || name === "restorebackup";
+
+    if (full && subject.isInGroup("@DRIVEADMIN_GROUP@")) {
+        return polkit.Result.AUTH_SELF_KEEP;
+    }
+    if (shared && subject.isInGroup("@NETMOUNT_GROUP@")) {
+        return polkit.Result.AUTH_SELF_KEEP;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

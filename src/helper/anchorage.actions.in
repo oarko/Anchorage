@@ -1,0 +1,27 @@
+[Domain]
+Name=@APP_NAME@
+Icon=drive-harddisk
+
+[@APP_ID@.writefstab]
+Name=Change /etc/fstab
+Description=Changing which drives and shares are mounted at startup requires authentication
+Policy=auth_admin
+Persistence=session
+
+[@APP_ID@.restorebackup]
+Name=Restore /etc/fstab from a backup
+Description=Restoring a saved copy of /etc/fstab requires authentication
+Policy=auth_admin
+Persistence=session
+
+[@APP_ID@.addsharedmount]
+Name=Add a shared network mount
+Description=Adding a network share that all users can see requires authentication
+Policy=auth_admin
+Persistence=session
+
+[@APP_ID@.removesharedmount]
+Name=Remove a shared network mount
+Description=Removing a shared network mount requires authentication
+Policy=auth_admin
+Persistence=session

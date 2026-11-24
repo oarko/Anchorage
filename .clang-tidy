@@ -5,12 +5,14 @@ Checks: >
   cert-*,
   clang-analyzer-*,
   cppcoreguidelines-pro-bounds-*,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
   cppcoreguidelines-pro-type-cstyle-cast,
   misc-*,
   -misc-include-cleaner,
   -misc-const-correctness,
   -misc-non-private-member-variables-in-classes,
   performance-*,
+  -performance-enum-size,
   readability-container-size-empty,
   readability-redundant-*
 ExtraArgs: ['-Wno-unknown-warning-option']   # compile_commands.json comes from GCC

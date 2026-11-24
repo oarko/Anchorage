@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+
+#include "fstab.h"
+#include "result.h"
+
+#include <QVariantMap>
+
+// Decoding of the argument maps the GUI sends to the helper. Every field is checked for
+// presence and exact type; unknown keys are refused, so a request means one thing only.
+namespace anchorage::requests
+{
+
+struct WriteFstab {
+    QByteArray baselineFingerprint; // 64 hex characters
+    QByteArray content;
+    bool confirmProtected = false;
+    bool createMountPoints = false;
+};
+
+struct Restore {
+    QString backupName;
+    bool confirmProtected = false;
+};
+
+Result<WriteFstab> decodeWriteFstab(const QVariantMap &args);
+Result<fstab::Entry> decodeEntry(const QVariantMap &args); // addsharedmount
+Result<QString> decodeMountPoint(const QVariantMap &args); // removesharedmount
+Result<Restore> decodeRestore(const QVariantMap &args);
+
+// Builders used by the GUI side (and tests), so both ends agree on the keys.
+QVariantMap encodeWriteFstab(const WriteFstab &request);
+QVariantMap encodeEntry(const fstab::Entry &entry);
+QVariantMap encodeMountPoint(const QString &mountPoint);
+QVariantMap encodeRestore(const Restore &request);
+
+} // namespace anchorage::requests

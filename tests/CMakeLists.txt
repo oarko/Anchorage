@@ -1,6 +1,9 @@
 ecm_add_tests(
     pathstest.cpp
     fstabtest.cpp
+    policytest.cpp
+    safefstest.cpp
+    servicetest.cpp
     LINK_LIBRARIES anchorage_core anchorage_hardening Qt6::Test
 )
 
