@@ -33,6 +33,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)   # used by clang-tidy
 
 option(ANCHORAGE_WERROR   "Treat compiler warnings as errors" ON)
 option(ANCHORAGE_SANITIZE "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+option(ANCHORAGE_FUZZ     "Build libFuzzer targets (requires clang; implies ANCHORAGE_SANITIZE)" OFF)
+if(ANCHORAGE_FUZZ)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "ANCHORAGE_FUZZ needs clang: use the \"fuzz\" preset")
+    endif()
+    set(ANCHORAGE_SANITIZE ON CACHE BOOL "" FORCE)
+endif()
 include(AnchorageHardening)
 
 find_package(Qt6 ${QT_MIN_VERSION} REQUIRED COMPONENTS Core Widgets Test)
@@ -49,6 +56,9 @@ configure_file(src/config-anchorage.h.in ${CMAKE_BINARY_DIR}/src/config-anchorag
 add_subdirectory(src)
 if(BUILD_TESTING)
     add_subdirectory(tests)
+endif()
+if(ANCHORAGE_FUZZ)
+    add_subdirectory(fuzz)
 endif()
 
 feature_summary(WHAT ALL INCLUDE_QUIET_PACKAGES FATAL_ON_MISSING_REQUIRED_PACKAGES)

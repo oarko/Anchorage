@@ -27,6 +27,10 @@ if(ANCHORAGE_SANITIZE)
     target_compile_options(anchorage_hardening INTERFACE
         -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
     target_link_options(anchorage_hardening INTERFACE -fsanitize=address,undefined)
+    if(ANCHORAGE_FUZZ)
+        # Coverage instrumentation for libFuzzer in every library the fuzzers link.
+        target_compile_options(anchorage_hardening INTERFACE -fsanitize=fuzzer-no-link)
+    endif()
 else()
     # Ubuntu's compiler already defines _FORTIFY_SOURCE; redefine cleanly to level 3.
     # FORTIFY only has an effect when optimising.

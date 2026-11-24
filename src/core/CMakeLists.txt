@@ -1,6 +1,8 @@
 # anchorage_core: logic shared by the GUI, the root helper and the tests.
 # No GUI dependencies allowed here, so the helper can link it.
 add_library(anchorage_core STATIC
+    fstab.cpp
+    fstab.h
     paths.h
     privilege.cpp
     privilege.h

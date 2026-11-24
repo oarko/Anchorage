@@ -1,0 +1,6 @@
+# Lines below mix valid entries with ones mount rejects
+UUID=ok-1 /mnt/ok1 ext4 defaults 0 0
+onlytwo /fields
+UUID=bad-dump /mnt/bad ext4 defaults x 0
+UUID=bad-pass /mnt/bad2 ext4 defaults 0 -1
+UUID=ok-2 /mnt/ok2 ext4 defaults 0 0

@@ -18,7 +18,7 @@ jobs:
       matrix:
         preset: [dev, release]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: |
@@ -39,3 +39,35 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: ctest --preset ${{ matrix.preset }}
+
+  fuzz:
+    name: Fuzz (short run)
+    runs-on: ubuntu-latest
+    container: ubuntu:26.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build extra-cmake-modules clang libclang-rt-dev \
+            qt6-base-dev qt6-tools-dev \
+            libkf6coreaddons-dev libkf6i18n-dev libkf6xmlgui-dev libkf6widgetsaddons-dev
+
+      - name: Build fuzzers
+        run: |
+          cmake --preset fuzz
+          cmake --build --preset fuzz
+
+      - name: Fuzz the fstab parser for 2 minutes
+        run: |
+          mkdir -p corpus
+          build/fuzz/bin/fstab_fuzzer -max_total_time=120 -max_len=8192 corpus tests/data
+
+      - name: Keep crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: crash-*

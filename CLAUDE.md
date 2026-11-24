@@ -81,6 +81,12 @@ These come from the user's requirements and apply to every change:
   `findmnt --verify --tab-file <file>` and
   `SYSTEMD_FSTAB=<file> /usr/lib/systemd/system-generators/systemd-fstab-generator <out> <out> <out>`
   (shows the mount/automount units systemd would create).
+- `findmnt` (util-linux 2.41.3) **crashes** right after printing "parse error at line N"
+  when a tab file has an unparseable line. Never rely on its exit code: our parser checks
+  first, and only findmnt's messages are used (see `tests/fstabtest.cpp`).
+- Fuzzing: `cmake --preset fuzz && cmake --build --preset fuzz`, then
+  `build/fuzz/bin/fstab_fuzzer -max_total_time=300 -max_len=8192 build/fuzz/corpus tests/data`.
+  CI runs it for 2 minutes on every push.
 - Real mount tests run in a throwaway privileged Docker container with
   `mount -T <proxy fstab> -a` (tmpfs, bind, loop images of ext4/btrfs/vfat/exfat, plus
   Samba and NFS server containers). Unprivileged user namespaces don't work here: Ubuntu

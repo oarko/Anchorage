@@ -1,0 +1,12 @@
+# Hand-edited file with mixed styles
+
+	UUID=aaaa-bbbb	/data	ext4	defaults,noatime	0	2
+  LABEL=Lingames   /mnt/lingames btrfs compress=zstd,nofail
+/dev/sdc1 /media/My\040USB\040Stick exfat uid=1000,gid=1000,umask=0022,noauto,user 0 0
+proc /proc proc defaults 0 0   # comments after field 6 are ignored by mount
+   # indented comment
+LABEL=Back\134slash /mnt/odd auto defaults
+/dev/sdd1 /mnt/x ext4
+
+#/dev/sde1 /mnt/disabled ext4 defaults 0 0
+UUID=dddd /srv/trailing-space xfs defaults 0 0   
