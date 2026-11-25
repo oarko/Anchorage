@@ -6,16 +6,24 @@
 #   tests/vm/vm.sh stop      shut down cleanly (forces off after 60 s)
 #   tests/vm/vm.sh status    show state and the SSH port
 #   tests/vm/vm.sh ssh [cmd] log in as the test user (after setup)
+#   tests/vm/vm.sh reset     throw away all changes: back to the clean base image
+#   tests/vm/vm.sh console   serial console (boot messages, emergency shell); Ctrl+] exits
 #
-# Why the cleanup: when the VM stops, libvirt can leave its "passt" network helper
-# running. It keeps holding the SSH port (127.0.0.1:2222), and the next start fails
-# with "Address already in use" (the IPv6 lines in that error are harmless noise).
+# Disks: anchorage-base.qcow2 is the clean, read-only install (plus its UEFI settings
+# anchorage-base_VARS.fd). The VM runs on anchorage-test.qcow2, a thin overlay on top of
+# it; `reset` replaces the overlay and UEFI settings with fresh copies.
+#
+# Networking is QEMU user-mode (see CLAUDE.md). The passt cleanup below is kept for VMs
+# still configured with libvirt's passt backend, which can leave its helper running
+# after a stop and block the next start with "Address already in use".
 set -euo pipefail
 
 CONN=qemu:///session
 VM=anchorage-test
 PORT=2222
-KEY="$HOME/.local/share/anchorage-vm/id_ed25519"
+DIR="$HOME/.local/share/anchorage-vm"
+KEY="$DIR/id_ed25519"
+NVRAM="$HOME/.config/libvirt/qemu/nvram/${VM}_VARS.fd"
 
 virsh_() { virsh -c "$CONN" "$@"; }
 
@@ -53,6 +61,9 @@ case "${1:-status}" in
     fi
     virsh_ start "$VM"
     ;;
+  console)
+    exec virsh -c "$CONN" console "$VM"
+    ;;
   view)
     exec virt-manager --connect "$CONN" --show-domain-console "$VM"
     ;;
@@ -71,6 +82,16 @@ case "${1:-status}" in
     cleanup_helpers
     echo "$VM: $(state)"
     ;;
+  reset)
+    if [ "$(state)" = "running" ]; then
+      virsh_ destroy "$VM" >/dev/null # no need to shut down cleanly: everything is discarded
+    fi
+    cleanup_helpers
+    rm -f "$DIR/anchorage-test.qcow2"
+    qemu-img create -q -f qcow2 -b "$DIR/anchorage-base.qcow2" -F qcow2 "$DIR/anchorage-test.qcow2"
+    install -m 600 "$DIR/anchorage-base_VARS.fd" "$NVRAM"
+    echo "$VM reset to the clean base image."
+    ;;
   status)
     echo "$VM: $(state)"
     ss -ltn | grep -q "127.0.0.1:${PORT} " && echo "SSH forward: 127.0.0.1:${PORT}" || echo "SSH forward: not listening"
@@ -81,7 +102,7 @@ case "${1:-status}" in
       -o UserKnownHostsFile="$HOME/.local/share/anchorage-vm/known_hosts" test@127.0.0.1 "$@"
     ;;
   *)
-    sed -n '2,10p' "$0"
+    sed -n '2,16p' "$0"
     exit 2
     ;;
 esac

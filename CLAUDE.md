@@ -98,10 +98,23 @@ These come from the user's requirements and apply to every change:
   end-to-end test in the local test VM.
 - **Test VM** (Kubuntu 26.04, libvirt per-user session `qemu:///session`, name
   `anchorage-test`, disk and VM-only SSH key in `~/.local/share/anchorage-vm/`, SSH forwarded
-  to `127.0.0.1:2222` only). Always use `tests/vm/vm.sh start|stop|view|status|ssh`: libvirt
-  leaves the `passt.avx2` network helper running after a stop, which blocks the next start
-  ("Address already in use"); the script cleans it up. Never kill passt with a `pkill -f`
-  pattern typed in the same shell command (it matches the shell itself).
+  to `127.0.0.1:2222` only). Use `tests/vm/vm.sh start|stop|view|status|ssh`.
+  Networking is QEMU user-mode (slirp) added through `<qemu:commandline>` (its own
+  pcie-root-port `anc-rp0` at slot 0x10, NIC MAC 52:54:00:62:5b:11, hostfwd
+  127.0.0.1:2222->22). libvirt's default passt backend gave the guest no IPv4 (no DHCP
+  answer), left stale `passt.avx2` helpers holding the port after stops, and AppArmor
+  blocks its log file. Bridged networking isn't possible in a per-user session.
+  Never kill a process with a `pkill -f` pattern typed in the same shell command (it
+  matches the shell itself).
+- VM contents: Kubuntu 26.04.1, btrfs, UEFI, user `test` (password in `~/.ancorage.env`,
+  mode 600; never print it), passwordless sudo inside the VM only, SSH keys only, serial
+  console on ttyS0 (`vm.sh console`), build dependencies installed.
+- `anchorage-base.qcow2` (+ `anchorage-base_VARS.fd`) is the clean, read-only install; the VM
+  runs on the overlay `anchorage-test.qcow2`. `tests/vm/vm.sh reset` discards every change in
+  seconds. Reset before and after any test that edits the VM's real `/etc/fstab`.
+- To change the base image (e.g. add packages): reset, start, make the change, stop, then
+  `qemu-img commit` the overlay into the base (make the base writable first) and copy the
+  overlay's VARS back to the base VARS.
 - Real mount tests run in a throwaway privileged Docker container with
   `mount -T <proxy fstab> -a` (tmpfs, bind, loop images of ext4/btrfs/vfat/exfat, plus
   Samba and NFS server containers). Unprivileged user namespaces don't work here: Ubuntu
