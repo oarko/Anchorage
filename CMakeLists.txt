@@ -36,6 +36,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)   # used by clang-tidy
 
 option(ANCHORAGE_WERROR   "Treat compiler warnings as errors" ON)
 option(ANCHORAGE_SANITIZE "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+option(ANCHORAGE_E2E      "Build the end-to-end KAuth test client (tests/vm/e2e.sh)" OFF)
 option(ANCHORAGE_FUZZ     "Build libFuzzer targets (requires clang; implies ANCHORAGE_SANITIZE)" OFF)
 if(ANCHORAGE_FUZZ)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -45,7 +46,7 @@ if(ANCHORAGE_FUZZ)
 endif()
 include(AnchorageHardening)
 
-find_package(Qt6 ${QT_MIN_VERSION} REQUIRED COMPONENTS Core Widgets Test)
+find_package(Qt6 ${QT_MIN_VERSION} REQUIRED COMPONENTS Core DBus Widgets Test)
 find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS
     CoreAddons
     I18n
@@ -63,6 +64,9 @@ if(BUILD_TESTING)
 endif()
 if(ANCHORAGE_FUZZ)
     add_subdirectory(fuzz)
+endif()
+if(ANCHORAGE_E2E)
+    add_subdirectory(tests/e2e)
 endif()
 
 feature_summary(WHAT ALL INCLUDE_QUIET_PACKAGES FATAL_ON_MISSING_REQUIRED_PACKAGES)

@@ -94,8 +94,20 @@ These come from the user's requirements and apply to every change:
   `ubuntu:26.04` container as real root, with the source mounted read-only and no network,
   and fails if the root-only tests were skipped. Never run tests as root on the host, and
   don't add sudoers rules for test binaries (a rebuildable binary with NOPASSWD = full root).
-- Not yet covered: the real KAuth/polkit round trip with the helper installed. Plan: an
-  end-to-end test in the local test VM.
+- **End-to-end** (real KAuth -> D-Bus -> polkit -> installed helper): `tests/vm/e2e.sh`
+  (~8 min; `--keep` leaves the VM up for investigating). It resets the VM, builds and
+  installs Anchorage there, creates test users alice/nora/dana/sam (standard/netmount/
+  driveadmins/sudo) with random in-memory passwords, and runs `tests/vm/e2e_scenarios.py`.
+  Run it after any change to the helper, polkit files or permission rules. Findings that
+  shaped it:
+  - polkit only treats sessions **on a seat** as local. SSH and the serial console are
+    refused outright (scenario 1 checks SSH). Scenarios therefore log in on tty3 (seat0),
+    typed via `virsh send-key`, screen read from `/dev/vcsa3` over SSH.
+  - KAuth's client-side check asks polkit about the client **process**, so `pkttyagent`
+    must be registered with `--process <client pid>`; the client waits for a handshake
+    (`ANCHORAGE_E2E_HANDSHAKE`) until the agent is registered.
+  - `auth_*_keep` is remembered per authenticating process: a new client process asks
+    again; the long-running GUI asks once per few minutes.
 - **Test VM** (Kubuntu 26.04, libvirt per-user session `qemu:///session`, name
   `anchorage-test`, disk and VM-only SSH key in `~/.local/share/anchorage-vm/`, SSH forwarded
   to `127.0.0.1:2222` only). Use `tests/vm/vm.sh start|stop|view|status|ssh`.
