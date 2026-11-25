@@ -25,7 +25,7 @@ Last updated: 2026-11-22
 | Frameworks | Qt 6, KDE Frameworks 6, ECM/CMake |
 | Target | Kubuntu 26.04, Plasma 6.6, Dolphin 25.12 |
 | Privileges | KAuth helper (polkit); GUI always runs as the user |
-| GUI toolkit | **QtWidgets/KXmlGui**, layout **C (Dolphin-like)**, see §15 |
+| GUI toolkit | **QtWidgets/KXmlGui** with KCategorizedView tiles, layout **C (Dolphin-like)**, see §15 |
 | Packaging | `.deb` for Kubuntu; `cmake --install` for development |
 | Name | **Anchorage**: binaries `anchorage`, `anchorage-helper`; config in `/etc/anchorage/`. app ID `io.github.oarko.anchorage`; repo https://github.com/oarko/Anchorage (private) |
 
@@ -177,12 +177,24 @@ General rules for every zone:
 
 ## 10. Drives
 
-- Detect disks/partitions/filesystems via Solid + libblkid: model, size, filesystem,
-  label, UUID, current mount, whether it's in fstab.
-- Per-drive status line, e.g. *"Lingames: users may mount ✓ · mounts on login for oarko ✓ · not in fstab"*.
-- Actions:
-  - **User**: Mount on login / stop.
-  - **Admin**: Add to fstab (mount on boot), Allow users to mount without password.
+Implemented (read-only) in `src/core/drives`, `mounts` and `inventory`:
+- Drives come from `lsblk --json` (util-linux): the same libblkid/udev data Solid uses,
+  no root needed, and its output can be captured as test fixtures. Solid's device
+  notifier, `/etc/fstab` and `/proc/self/mountinfo` are watched to refresh automatically.
+- Current mounts come from `/proc/self/mountinfo`.
+- The inventory joins fstab entries with their devices (`UUID=`, `LABEL=`, `PARTUUID=`,
+  `PARTLABEL=`, `/dev/disk/by-*`, plain paths) and current mounts, then adds drives that
+  aren't in fstab (e.g. Lingames, mounted by Dolphin at /run/media/<user>/...) and mounted
+  network shares that aren't in fstab.
+- Hidden: snap images (squashfs loop devices), whole disks without a file system, RAID/LVM
+  members, encrypted containers, CD/DVD, RAM disks. Attached disk images are shown.
+- Unlabelled partitions are named from their partition type ("EFI system partition",
+  "Windows recovery partition"), otherwise "<size> <FS> partition".
+- Anything on the file system mounted at "/" (e.g. the btrfs `/swap` subvolume) counts as
+  a system entry, in the display and in the helper's permission rules.
+- Per-drive status (planned, with editing): users may mount ✓ · mounts on login · in fstab.
+- Actions (planned): **User**: Mount on login / stop. **Admin**: Add to fstab, Allow users
+  to mount without password.
 
 ## 11. Network shares
 

@@ -188,9 +188,9 @@ ZoneResult classifyMountPoint(const QString &path, const QStringList &extraBlock
     return {Zone::Override, QStringLiteral("Outside the usual mount locations.")};
 }
 
-bool isSystemEntry(const Entry &entry)
+bool isSystemEntry(const Entry &entry, const QStringList &rootSpecs)
 {
-    if (entry.type == QLatin1String("swap")) {
+    if (entry.type == QLatin1String("swap") || rootSpecs.contains(entry.spec)) {
         return true;
     }
     const QString &mp = entry.mountPoint;
@@ -243,12 +243,20 @@ Plan planFstabWrite(QByteArrayView current, QByteArrayView proposed, const Calle
     plan.removed = difference(oldEntries, newEntries);
 
     QSet<QString> oldMountPoints;
+    QStringList rootSpecs; // from both files, so moving "/" can't hide its siblings
+    for (const QList<Entry> *list : {&oldEntries, &newEntries}) {
+        for (const Entry &e : *list) {
+            if (e.mountPoint == QLatin1String("/") && !rootSpecs.contains(e.spec)) {
+                rootSpecs.append(e.spec);
+            }
+        }
+    }
     for (const Entry &e : oldEntries) {
         oldMountPoints.insert(e.mountPoint);
     }
 
     for (const Entry &e : plan.removed) {
-        if (isSystemEntry(e) && !caller.fullAccess()) {
+        if (isSystemEntry(e, rootSpecs) && !caller.fullAccess()) {
             plan.errors.append(QStringLiteral("Only driveadmins or administrators can change the system entry for %1.").arg(e.mountPoint));
         }
     }
@@ -259,7 +267,7 @@ Plan planFstabWrite(QByteArrayView current, QByteArrayView proposed, const Calle
                 plan.errors.append(QStringLiteral("%1: %2").arg(e.mountPoint, issue.message));
             }
         }
-        if (isSystemEntry(e) && !caller.fullAccess()) {
+        if (isSystemEntry(e, rootSpecs) && !caller.fullAccess()) {
             plan.errors.append(QStringLiteral("Only driveadmins or administrators can add or change the system entry for %1.").arg(e.mountPoint));
             continue;
         }

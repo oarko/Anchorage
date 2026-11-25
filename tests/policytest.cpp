@@ -144,6 +144,22 @@ private Q_SLOTS:
         QVERIFY(planFstabWrite(baseFile, removed, driveadmin, false).ok());
     }
 
+    void subvolumesOfTheRootFileSystemAreSystem()
+    {
+        // /swap is a btrfs subvolume on the same file system as "/" (Kubuntu's layout).
+        const QByteArray f = baseFile + "UUID=root /swap btrfs subvol=/@swap 0 0\n";
+        QByteArray changed = f;
+        changed.replace("subvol=/@swap", "subvol=/@swap,noatime");
+        QVERIFY(!planFstabWrite(f, changed, standard, false).ok());
+        QVERIFY(planFstabWrite(f, changed, driveadmin, false).ok());
+        QByteArray removed = f;
+        removed.replace("UUID=root /swap btrfs subvol=/@swap 0 0\n", "");
+        QVERIFY(!planFstabWrite(f, removed, standard, false).ok());
+        // Adding a new subvolume mount of the root file system is also a system change.
+        QVERIFY(!planFstabWrite(baseFile, f, standard, false).ok());
+        QVERIFY(isSystemEntry({QStringLiteral("UUID=root"), QStringLiteral("/data"), QStringLiteral("btrfs"), {}, 0, 0}, {QStringLiteral("UUID=root")}));
+    }
+
     void movingAnEntryOntoASystemFolderIsCaught()
     {
         QByteArray moved = baseFile;

@@ -10,7 +10,9 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
 
 ## Project status
 
-- Design agreed: layout C (Dolphin-like, QtWidgets), see SPEC §15. **No code has been written yet.**
+- Design agreed: layout C (Dolphin-like, QtWidgets), see SPEC §15.
+- Done: fstab reader/writer, root helper + permission rules, drive detection, read-only main
+  window. Next: editing (entry editor + Apply), then network shares (SPEC §11).
 - SMB share *creation* is a planned phase 2 feature (SPEC §16); keep v1 scope to mounting.
 - Ask the user before starting implementation.
 
@@ -94,6 +96,12 @@ These come from the user's requirements and apply to every change:
   `ubuntu:26.04` container as real root, with the source mounted read-only and no network,
   and fails if the root-only tests were skipped. Never run tests as root on the host, and
   don't add sudoers rules for test binaries (a rebuildable binary with NOPASSWD = full root).
+- **Drive detection on real file systems**: `tests/vm/drives.sh` (~1 min) creates ext4, btrfs,
+  FAT and exFAT disk images in the VM, attaches them as loop devices and checks the scanner.
+- **GUI**: `tests/guitest.cpp` builds the real main window from fixtures; set
+  `ANCHORAGE_SCREENSHOTS=<dir>` to save screenshots of each view for review.
+- `KCategorizedView` (KF 6.24) crashes (ASan: negative-size-param) when a filter change
+  removes rows across categories; `InventoryFilter` uses `invalidate()` instead.
 - **End-to-end** (real KAuth -> D-Bus -> polkit -> installed helper): `tests/vm/e2e.sh`
   (~8 min; `--keep` leaves the VM up for investigating). It resets the VM, builds and
   installs Anchorage there, creates test users alice/nora/dana/sam (standard/netmount/
@@ -118,12 +126,15 @@ These come from the user's requirements and apply to every change:
   blocks its log file. Bridged networking isn't possible in a per-user session.
   Never kill a process with a `pkill -f` pattern typed in the same shell command (it
   matches the shell itself).
+- Shell deletes that use a variable must guard it and stay narrow:
+  `rm -f -- "${DIR:?}"/*.png`, never `rm -f $DIR/*` (an empty variable would mean `/*`).
 - VM contents: Kubuntu 26.04.1, btrfs, UEFI, user `test` (password in `~/.ancorage.env`,
   mode 600; never print it), passwordless sudo inside the VM only, SSH keys only, serial
   console on ttyS0 (`vm.sh console`), build dependencies installed.
 - `anchorage-base.qcow2` (+ `anchorage-base_VARS.fd`) is the clean, read-only install; the VM
   runs on the overlay `anchorage-test.qcow2`. `tests/vm/vm.sh reset` discards every change in
   seconds. Reset before and after any test that edits the VM's real `/etc/fstab`.
+- In the VM use `sudo env DEBIAN_FRONTEND=noninteractive apt-get ...`: Ubuntu 26.04's sudo ignores `-E`.
 - To change the base image (e.g. add packages): reset, start, make the change, stop, then
   `qemu-img commit` the overlay into the base (make the base writable first) and copy the
   overlay's VARS back to the base VARS.

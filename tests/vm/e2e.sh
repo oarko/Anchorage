@@ -21,12 +21,10 @@ step() { printf '\n== %s\n' "$*"; }
 step "Resetting the VM to the clean base image"
 "$vm" reset
 "$vm" start >/dev/null
-timeout 240 bash -c "until '$vm' ssh -o BatchMode=yes -o ConnectTimeout=3 true 2>/dev/null; do sleep 3; done"
+"$vm" wait
 
 step "Copying the source into the VM"
-rsync -a --delete --exclude /build/ --exclude /iso/ --exclude /.git/ --exclude /.cache/ \
-  -e "ssh -i $HOME/.local/share/anchorage-vm/id_ed25519 -p 2222 -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.local/share/anchorage-vm/known_hosts" \
-  "$src/" test@127.0.0.1:src/
+"$vm" sync
 
 step "Building and installing Anchorage in the VM"
 "$vm" ssh -o BatchMode=yes 'set -e

@@ -1,12 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE gui SYSTEM "kpartgui.dtd">
-<gui name="anchorage" version="1">
+<gui name="anchorage" version="2">
   <MenuBar>
     <Menu name="file">
       <text>&amp;File</text>
     </Menu>
+    <Menu name="view">
+      <text>&amp;View</text>
+      <Action name="view_redisplay"/>
+    </Menu>
   </MenuBar>
   <ToolBar name="mainToolBar">
     <text>Main Toolbar</text>
+    <Action name="view_redisplay"/>
   </ToolBar>
 </gui>

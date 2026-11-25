@@ -53,8 +53,11 @@ find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS
     XmlGui
     WidgetsAddons
     Auth
+    ItemViews
+    ColorScheme
+    Solid
 )
-# Later phases add: Solid, KIO, Wallet, DNSSD, libmount/libblkid, libsmbclient.
+# Later phases add: KIO, Wallet, DNSSD, libsmbclient.
 
 configure_file(src/config-anchorage.h.in ${CMAKE_BINARY_DIR}/src/config-anchorage.h)
 

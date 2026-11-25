@@ -3,6 +3,12 @@
 add_library(anchorage_core STATIC
     caller.cpp
     caller.h
+    drives.cpp
+    drives.h
+    inventory.cpp
+    inventory.h
+    mounts.cpp
+    mounts.h
     fstabservice.cpp
     fstabservice.h
     mountpolicy.cpp

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "config-anchorage.h"
+#include "datasource.h"
 #include "mainwindow.h"
 #include "privilege.h"
 
@@ -21,6 +22,7 @@ int main(int argc, char *argv[])
     }
 
     QApplication app(argc, argv);
+    Q_INIT_RESOURCE(anchorage); // the UI description lives in the static anchorage_ui library
     KLocalizedString::setApplicationDomain(ANCHORAGE_APP_BINARY);
 
     KAboutData about(QStringLiteral(ANCHORAGE_APP_BINARY),
@@ -38,7 +40,7 @@ int main(int argc, char *argv[])
     parser.process(app);
     about.processCommandLine(&parser);
 
-    auto *window = new MainWindow;
+    auto *window = new MainWindow(new SystemDataSource);
     window->show();
     return app.exec();
 }

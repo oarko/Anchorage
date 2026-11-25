@@ -1,0 +1,12 @@
+24 1 0:22 /@ / rw,noatime shared:1 - btrfs /dev/nvme1n1p1 rw,ssd,discard=async,space_cache=v2,autodefrag,subvolid=256,subvol=/@
+25 24 0:5 / /proc rw,nosuid,nodev,noexec,relatime shared:12 - proc proc rw
+26 24 0:23 / /sys rw,nosuid,nodev,noexec,relatime shared:2 - sysfs sysfs rw
+40 24 0:22 /@home /home rw,noatime shared:3 - btrfs /dev/nvme1n1p1 rw,ssd,space_cache=v2,autodefrag,subvolid=257,subvol=/@home
+41 24 0:22 /@swap /swap rw,relatime shared:4 - btrfs /dev/nvme1n1p1 rw,ssd,space_cache=v2,subvolid=258,subvol=/@swap
+42 24 259:2 / /boot/efi rw,relatime shared:5 - vfat /dev/nvme1n1p2 rw,fmask=0077,dmask=0077
+43 24 0:40 / /tmp rw,nosuid,nodev,noatime shared:6 - tmpfs tmpfs rw,mode=1777
+50 24 7:0 / /snap/bare/5 ro,nodev,relatime shared:20 - squashfs /dev/loop0 ro
+60 24 8:17 / /run/media/oarko/Lingames rw,nosuid,nodev,relatime shared:30 - btrfs /dev/sdb1 rw,ssd,space_cache=v2,subvolid=5,subvol=/
+70 24 0:60 / /mnt/media rw,relatime shared:40 - nfs4 nas.local:/export/media rw,vers=4.2,addr=192.168.1.20
+71 24 0:61 / /run/media/oarko/My\040Games rw,nosuid,nodev,relatime shared:41 - cifs //nas.local/My\040Games rw,vers=3.1.1
+80 24 0:70 / /run/user/1000/doc rw,nosuid,nodev,relatime shared:50 - fuse.portal portal rw,user_id=1000

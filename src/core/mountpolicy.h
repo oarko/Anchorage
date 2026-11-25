@@ -33,8 +33,10 @@ QString checkPathSyntax(const QString &path);
 // `extraBlocked` comes from the root-owned blocked-paths file; it can only add protection.
 ZoneResult classifyMountPoint(const QString &path, const QStringList &extraBlocked = {});
 
-// Entries the computer needs to start: /, /boot..., /home, /usr..., /var..., /tmp, swap.
-bool isSystemEntry(const fstab::Entry &entry);
+// Entries the computer needs to start: /, /boot..., /home, /usr..., /var..., /tmp, swap,
+// and anything else on the file system mounted at "/" (`rootSpecs`: the device fields
+// of the "/" entries, e.g. btrfs subvolumes like /swap that share the root's UUID).
+bool isSystemEntry(const fstab::Entry &entry, const QStringList &rootSpecs = {});
 
 bool isNetworkType(const QString &type); // cifs, smb3, nfs, nfs4
 

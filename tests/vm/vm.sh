@@ -7,6 +7,8 @@
 #   tests/vm/vm.sh status    show state and the SSH port
 #   tests/vm/vm.sh ssh [cmd] log in as the test user (after setup)
 #   tests/vm/vm.sh reset     throw away all changes: back to the clean base image
+#   tests/vm/vm.sh wait      wait until the VM accepts SSH (up to 4 minutes)
+#   tests/vm/vm.sh sync      copy the source tree into the VM (~/src)
 #   tests/vm/vm.sh console   serial console (boot messages, emergency shell); Ctrl+] exits
 #
 # Disks: anchorage-base.qcow2 is the clean, read-only install (plus its UEFI settings
@@ -61,6 +63,14 @@ case "${1:-status}" in
     fi
     virsh_ start "$VM"
     ;;
+  wait)
+    timeout 240 bash -c "until '$0' ssh -o BatchMode=yes -o ConnectTimeout=3 true 2>/dev/null; do sleep 3; done"
+    ;;
+  sync)
+    src=$(cd "$(dirname "$0")/../.." && pwd)
+    rsync -a --delete --exclude /build/ --exclude /iso/ --exclude /.git/ --exclude /.cache/ --exclude __pycache__/ \
+      -e "ssh -i $KEY -p $PORT -o IdentitiesOnly=yes -o UserKnownHostsFile=$DIR/known_hosts" "$src/" test@127.0.0.1:src/
+    ;;
   console)
     exec virsh -c "$CONN" console "$VM"
     ;;
@@ -69,7 +79,9 @@ case "${1:-status}" in
     ;;
   stop)
     if [ "$(state)" = "running" ]; then
-      virsh_ shutdown "$VM" >/dev/null
+      # Ask the VM itself first: with a desktop session running, Plasma answers the
+      # virtual power button with a logout dialog instead of shutting down.
+      "$0" ssh -o BatchMode=yes -o ConnectTimeout=5 'sudo systemctl poweroff' >/dev/null 2>&1 || virsh_ shutdown "$VM" >/dev/null
       for _ in $(seq 60); do
         [ "$(state)" = "running" ] || break
         sleep 1
@@ -102,7 +114,7 @@ case "${1:-status}" in
       -o UserKnownHostsFile="$HOME/.local/share/anchorage-vm/known_hosts" test@127.0.0.1 "$@"
     ;;
   *)
-    sed -n '2,16p' "$0"
+    sed -n '2,18p' "$0"
     exit 2
     ;;
 esac

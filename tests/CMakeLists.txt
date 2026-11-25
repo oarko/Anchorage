@@ -4,7 +4,12 @@ ecm_add_tests(
     policytest.cpp
     safefstest.cpp
     servicetest.cpp
+    inventorytest.cpp
     LINK_LIBRARIES anchorage_core anchorage_hardening Qt6::Test
 )
 
-target_compile_definitions(fstabtest PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+ecm_add_test(guitest.cpp LINK_LIBRARIES anchorage_ui anchorage_hardening Qt6::Test)
+
+foreach(t fstabtest inventorytest guitest)
+    target_compile_definitions(${t} PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+endforeach()
