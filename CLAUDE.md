@@ -89,9 +89,19 @@ These come from the user's requirements and apply to every change:
   `build/fuzz/bin/policy_fuzzer -max_total_time=300 -max_len=4096 build/fuzz/corpus-policy fuzz/seeds/policy`.
   CI runs each for 1 minute on every push. Keep any crash input that turned out to be a
   harness mistake as a regression seed in `fuzz/seeds/`.
-- Not yet covered: code paths that only run as root (fchown of new folders/files) and the
-  real KAuth/polkit round trip. Plan: run the test suite as root inside Docker, and an
-  end-to-end helper test in a VM or container with polkit.
+- **Root-only code paths** (owners of written files and new folders): run
+  `tests/docker/run-root-tests.sh [dev|release]`. It builds inside a throwaway
+  `ubuntu:26.04` container as real root, with the source mounted read-only and no network,
+  and fails if the root-only tests were skipped. Never run tests as root on the host, and
+  don't add sudoers rules for test binaries (a rebuildable binary with NOPASSWD = full root).
+- Not yet covered: the real KAuth/polkit round trip with the helper installed. Plan: an
+  end-to-end test in the local test VM.
+- **Test VM** (Kubuntu 26.04, libvirt per-user session `qemu:///session`, name
+  `anchorage-test`, disk and VM-only SSH key in `~/.local/share/anchorage-vm/`, SSH forwarded
+  to `127.0.0.1:2222` only). Always use `tests/vm/vm.sh start|stop|view|status|ssh`: libvirt
+  leaves the `passt.avx2` network helper running after a stop, which blocks the next start
+  ("Address already in use"); the script cleans it up. Never kill passt with a `pkill -f`
+  pattern typed in the same shell command (it matches the shell itself).
 - Real mount tests run in a throwaway privileged Docker container with
   `mount -T <proxy fstab> -a` (tmpfs, bind, loop images of ext4/btrfs/vfat/exfat, plus
   Samba and NFS server containers). Unprivileged user namespaces don't work here: Ubuntu

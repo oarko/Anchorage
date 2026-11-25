@@ -10,6 +10,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 using namespace anchorage;
@@ -38,6 +39,22 @@ const QByteArray initial =
     "# /etc/fstab test copy\n"
     "UUID=root  /      ext4  errors=remount-ro  0 1\n"
     "UUID=home  /home  ext4  defaults           0 2\n";
+
+struct FileInfo {
+    uid_t uid = 0;
+    gid_t gid = 0;
+    mode_t mode = 0;
+};
+FileInfo statOf(const QString &path)
+{
+    struct stat st {
+    };
+    ::lstat(QFile::encodeName(path).constData(), &st);
+    return {st.st_uid, st.st_gid, static_cast<mode_t>(st.st_mode & 07777)};
+}
+
+// An arbitrary non-root owner for "someone's home folder" (doesn't need to exist).
+constexpr uid_t homeOwner = 4242;
 
 QByteArray readPlain(const QString &path)
 {
@@ -277,6 +294,73 @@ private Q_SLOTS:
         QVariantMap badEntry = requests::encodeEntry(e);
         badEntry[QStringLiteral("pass")] = QStringLiteral("0");
         QVERIFY(!requests::decodeEntry(badEntry).ok());
+    }
+
+    // ---- Only meaningful as root (run tests/docker/run-root-tests.sh) ----------------
+    void rootWritesRootOwnedFiles()
+    {
+        if (geteuid() != 0) {
+            QSKIP("needs root: run tests/docker/run-root-tests.sh");
+        }
+        // Start from a file owned by someone else, to prove the helper resets ownership.
+        QVERIFY(::chown(QFile::encodeName(fstabPath()).constData(), homeOwner, homeOwner) == 0);
+        const Outcome o = write(standard, initial + "LABEL=a  /mnt/a  ext4  nofail  0 0\n");
+        QVERIFY2(o.ok(), qPrintable(o.errors.join(QLatin1Char('\n'))));
+        const FileInfo f = statOf(fstabPath());
+        QCOMPARE(f.uid, uid_t(0));
+        QCOMPARE(f.gid, gid_t(0));
+        QCOMPARE(f.mode, mode_t(0644));
+        const FileInfo b = statOf(m_paths.backupDir + QLatin1Char('/') + o.backupName);
+        QCOMPARE(b.uid, uid_t(0));
+        QCOMPARE(b.mode, mode_t(0644));
+        const FileInfo mp = statOf(m_paths.mountRoot + QStringLiteral("/mnt/a"));
+        QCOMPARE(mp.uid, uid_t(0));
+        QCOMPARE(mp.gid, gid_t(0));
+        QCOMPARE(mp.mode, mode_t(0755));
+    }
+
+    void rootGivesHomeMountPointsToTheHomeOwner()
+    {
+        if (geteuid() != 0) {
+            QSKIP("needs root: run tests/docker/run-root-tests.sh");
+        }
+        const QString home = m_paths.mountRoot + QStringLiteral("/home/alice");
+        QVERIFY(QDir().mkpath(home));
+        QVERIFY(::chown(QFile::encodeName(home).constData(), homeOwner, homeOwner) == 0);
+        const Outcome o = write(standard, initial + "nas:/x  /home/alice/NAS/games  nfs4  nofail  0 0\n");
+        QVERIFY2(o.ok(), qPrintable(o.errors.join(QLatin1Char('\n'))));
+        for (const QString &dir : QStringList{home + QStringLiteral("/NAS"), home + QStringLiteral("/NAS/games")}) {
+            const FileInfo d = statOf(dir);
+            QCOMPARE(d.uid, homeOwner);
+            QCOMPARE(d.gid, gid_t(homeOwner));
+            QCOMPARE(d.mode, mode_t(0755));
+        }
+        QCOMPARE(statOf(home).uid, homeOwner); // existing folders are left alone
+    }
+
+    void rootStillRefusesSymlinks()
+    {
+        if (geteuid() != 0) {
+            QSKIP("needs root: run tests/docker/run-root-tests.sh");
+        }
+        // Root bypasses permission checks, but must not follow a planted symlink.
+        const QString target = m_tmp->path() + QStringLiteral("/root-owned-target");
+        QVERIFY(QDir().mkpath(target));
+        QVERIFY(QFile::link(target, m_paths.mountRoot + QStringLiteral("/mnt/trap")));
+        QVERIFY(!write(sudoer, initial + "LABEL=a  /mnt/trap/x  ext4  nofail  0 0\n").ok());
+        QVERIFY(!QFileInfo::exists(target + QStringLiteral("/x")));
+
+        QVERIFY(QFile::remove(fstabPath()));
+        QVERIFY(QFile::link(target, fstabPath()));
+        QVERIFY(!readFstab(m_paths).ok());
+    }
+
+    void rootCallerIsAdministrator()
+    {
+        const auto root = resolveCaller(0, defaultGroupNames());
+        QVERIFY(root.ok());
+        QVERIFY(root->sudo);
+        QVERIFY(root->fullAccess());
     }
 
     void callerLookup()

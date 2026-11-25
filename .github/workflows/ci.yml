@@ -40,6 +40,16 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --preset ${{ matrix.preset }}
 
+      - name: Confirm root-only tests ran (CI containers run as root)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          id
+          if build/${{ matrix.preset }}/bin/servicetest 2>&1 | grep -q 'needs root'; then
+            echo "Root-only tests were skipped" >&2
+            exit 1
+          fi
+
   fuzz:
     name: Fuzz (short run)
     runs-on: ubuntu-latest
