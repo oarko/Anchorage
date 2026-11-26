@@ -2,6 +2,7 @@
 #include "entryeditor.h"
 
 #include "inventory.h"
+#include "locations.h"
 #include "mountpolicy.h"
 
 #include <KColorScheme>
@@ -13,6 +14,8 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -204,7 +207,7 @@ EntryEditor::EntryEditor(const fstab::Entry &initial, bool isNew, const EditorCo
     m_tabs->addTab(buildAdvancedTab(), i18n("Advanced"));
     layoutV->addWidget(m_tabs, 1);
 
-    auto *previewTitle = new QLabel(i18n("Line in /etc/fstab:"), this);
+    auto *previewTitle = new QLabel(i18n("Lines in /etc/fstab:"), this);
     m_preview = new QLabel(this);
     m_preview->setObjectName(QStringLiteral("editor.preview"));
     m_preview->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
@@ -233,9 +236,10 @@ EntryEditor::EntryEditor(const fstab::Entry &initial, bool isNew, const EditorCo
         m_entry.options = access::apply({}, access::defaultsFor(m_entry.type), m_entry.type);
         m_entry.pass = 0;
     }
+    m_binds = m_ctx.binds;
     rebuildAdvancedTable();
     refresh();
-    resize(820, 680);
+    resize(820, 760);
 }
 
 // ---- Basic --------------------------------------------------------------------------
@@ -297,10 +301,31 @@ QWidget *EntryEditor::buildBasicTab()
         }
     });
 
-    m_mountPoint = new QLineEdit(page);
+    m_mountPointBox = new QComboBox(page);
+    m_mountPointBox->setObjectName(QStringLiteral("editor.mountPointBox"));
+    m_mountPointBox->setEditable(true);
+    m_mountPointBox->setInsertPolicy(QComboBox::NoInsert);
+    m_mountPoint = m_mountPointBox->lineEdit();
     m_mountPoint->setObjectName(QStringLiteral("editor.mountPoint"));
     m_mountPoint->setPlaceholderText(QStringLiteral("/mnt/data"));
-    form->addRow(i18n("Mount point:"), m_mountPoint);
+    auto *browse = new QPushButton(QIcon::fromTheme(QStringLiteral("document-open-folder")), i18n("Browse…"), page);
+    browse->setObjectName(QStringLiteral("editor.browse"));
+    auto *mpRow = new QHBoxLayout;
+    mpRow->addWidget(m_mountPointBox, 1);
+    mpRow->addWidget(browse);
+    form->addRow(i18n("Mount point:"), mpRow);
+    connect(browse, &QPushButton::clicked, this, [this] {
+        const QString start = QFileInfo::exists(m_entry.mountPoint) ? m_entry.mountPoint : QStringLiteral("/mnt");
+        const QString dir = QFileDialog::getExistingDirectory(this, i18n("Choose the Mount Point"), start);
+        if (!dir.isEmpty()) {
+            m_entry.mountPoint = dir;
+            refresh();
+        }
+    });
+    connect(m_mountPointBox, &QComboBox::activated, this, [this](int index) {
+        m_entry.mountPoint = m_mountPointBox->itemText(index);
+        refresh();
+    });
     m_zone = note(QString(), page);
     m_zone->setObjectName(QStringLiteral("editor.zone"));
     form->addRow(QString(), m_zone);
@@ -324,6 +349,85 @@ QWidget *EntryEditor::buildBasicTab()
             typeChanged(t.trimmed());
         }
     });
+
+    // "Also show it at…": bind entries saved together with this one.
+    auto *bindBox = new QGroupBox(i18n("Also show it at…"), page);
+    m_bindBox = bindBox;
+    auto *bv = new QVBoxLayout(bindBox);
+    bv->addWidget(note(i18n("The same files at more places, e.g. where programs expect them. Each place is its own fstab line that waits "
+                            "for this drive, so a missing drive never shows its empty folder."),
+                       bindBox));
+    m_bindList = new QTreeWidget(bindBox);
+    m_bindList->setObjectName(QStringLiteral("editor.binds"));
+    m_bindList->setHeaderLabels({i18n("Shown at"), i18n("Folder on the drive")});
+    m_bindList->setRootIsDecorated(false);
+    m_bindList->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_bindList->setMaximumHeight(110);
+    bv->addWidget(m_bindList);
+    m_keepOld = new QCheckBox(bindBox);
+    m_keepOld->setObjectName(QStringLiteral("editor.keepOld"));
+    bv->addWidget(m_keepOld);
+    auto *bindButtons = new QHBoxLayout;
+    auto *addBindButton = new QPushButton(QIcon::fromTheme(QStringLiteral("list-add")), i18n("Add Place…"), bindBox);
+    addBindButton->setObjectName(QStringLiteral("editor.addBind"));
+    auto *removeBindButton = new QPushButton(QIcon::fromTheme(QStringLiteral("list-remove")), i18n("Remove"), bindBox);
+    removeBindButton->setObjectName(QStringLiteral("editor.removeBind"));
+    bindButtons->addWidget(addBindButton);
+    bindButtons->addWidget(removeBindButton);
+    bindButtons->addStretch(1);
+    bv->addLayout(bindButtons);
+    outer->insertWidget(1, bindBox);
+    connect(m_keepOld, &QCheckBox::toggled, this, [this] {
+        refresh();
+    });
+    connect(removeBindButton, &QPushButton::clicked, this, [this] {
+        removeBind(m_bindList->currentIndex().row());
+    });
+    connect(addBindButton, &QPushButton::clicked, this, [this] {
+        QDialog dlg(this);
+        dlg.setObjectName(QStringLiteral("bindDialog"));
+        dlg.setWindowTitle(i18n("Also Show It At…"));
+        auto *f = new QFormLayout(&dlg);
+        auto *target = new QLineEdit(&dlg);
+        target->setObjectName(QStringLiteral("bind.target"));
+        target->setPlaceholderText(QStringLiteral("/home/you/Games"));
+        auto *pickTarget = new QPushButton(i18n("Browse…"), &dlg);
+        auto *tRow = new QHBoxLayout;
+        tRow->addWidget(target, 1);
+        tRow->addWidget(pickTarget);
+        auto *sub = new QLineEdit(&dlg);
+        sub->setObjectName(QStringLiteral("bind.subfolder"));
+        sub->setPlaceholderText(i18n("empty: the whole drive"));
+        auto *pickSub = new QPushButton(i18n("Browse…"), &dlg);
+        pickSub->setEnabled(!m_mountedAt.isEmpty());
+        pickSub->setToolTip(i18n("Available while the drive is mounted."));
+        auto *sRow = new QHBoxLayout;
+        sRow->addWidget(sub, 1);
+        sRow->addWidget(pickSub);
+        f->addRow(i18n("Show it at:"), tRow);
+        f->addRow(i18n("Folder on the drive:"), sRow);
+        auto *bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+        f->addRow(bb);
+        connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+        connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        connect(pickTarget, &QPushButton::clicked, &dlg, [&dlg, target] {
+            const QString d = QFileDialog::getExistingDirectory(&dlg, i18n("Choose a Folder"), QDir::homePath());
+            if (!d.isEmpty()) {
+                target->setText(d);
+            }
+        });
+        connect(pickSub, &QPushButton::clicked, &dlg, [this, &dlg, sub] {
+            const QString d = QFileDialog::getExistingDirectory(&dlg, i18n("Choose a Folder on the Drive"), m_mountedAt);
+            if (d.startsWith(m_mountedAt + QLatin1Char('/'))) {
+                sub->setText(d.mid(m_mountedAt.size() + 1));
+            } else if (d == m_mountedAt) {
+                sub->clear();
+            }
+        });
+        if (dlg.exec() == QDialog::Accepted && !target->text().trimmed().isEmpty()) {
+            addBind({sub->text().trimmed(), target->text().trimmed()});
+        }
+    });
     return page;
 }
 
@@ -338,9 +442,87 @@ void EntryEditor::useVolume(const drives::Volume &v)
     if (m_entry.type == QLatin1String("swap")) {
         m_entry.mountPoint = QStringLiteral("none");
     } else if (m_isNew && (m_entry.mountPoint.isEmpty() || m_entry.mountPoint == m_initial.mountPoint)) {
-        m_entry.mountPoint = QStringLiteral("/mnt/") + mountPointName(v);
+        // Where it is mounted now, if anywhere usable; otherwise /mnt/<name> (SPEC §8).
+        const QStringList s = locations::suggestions(v, m_ctx.me.name, m_ctx.mounts, [](const QString &p) {
+            return QFileInfo::exists(p);
+        });
+        m_entry.mountPoint = s.isEmpty() ? QStringLiteral("/mnt/") + mountPointName(v) : s.first();
     }
     refresh();
+}
+
+void EntryEditor::updateSuggestions()
+{
+    QStringList items;
+    m_mountedAt.clear();
+    if (const auto *v = matchingVolume()) {
+        items = locations::suggestions(*v, m_ctx.me.name, m_ctx.mounts, [](const QString &p) {
+            return QFileInfo::exists(p);
+        });
+        for (const QString &mp : v->mountPoints) {
+            if (!mp.isEmpty() && items.contains(mp)) {
+                m_mountedAt = mp; // first usable place it is mounted at now
+                break;
+            }
+        }
+    }
+    if (!m_initial.mountPoint.isEmpty() && !items.contains(m_initial.mountPoint) && m_initial.mountPoint != QLatin1String("none")) {
+        items.prepend(m_initial.mountPoint);
+    }
+    QStringList now;
+    for (int i = 0; i < m_mountPointBox->count(); ++i) {
+        now.append(m_mountPointBox->itemText(i));
+    }
+    if (now != items) {
+        const QSignalBlocker block(m_mountPointBox);
+        m_mountPointBox->clear();
+        m_mountPointBox->addItems(items);
+        m_mountPoint->setText(m_entry.mountPoint);
+    }
+}
+
+QList<binds::Bind> EntryEditor::binds() const
+{
+    QList<binds::Bind> out = m_binds;
+    // isHidden, not isVisible: this is also read after the dialog has closed.
+    if (!m_keepOld->isHidden() && m_keepOld->isChecked() && !m_mountedAt.isEmpty()) {
+        const binds::Bind keep{QString(), m_mountedAt};
+        if (!out.contains(keep)) {
+            out.append(keep);
+        }
+    }
+    return out;
+}
+
+void EntryEditor::addBind(const binds::Bind &bind)
+{
+    m_binds.append(bind);
+    refresh();
+}
+
+void EntryEditor::removeBind(int index)
+{
+    if (index >= 0 && index < m_binds.size()) {
+        m_binds.removeAt(index);
+        refresh();
+    }
+}
+
+void EntryEditor::refreshBinds()
+{
+    const bool can = m_entry.type != QLatin1String("swap") && m_entry.type != QLatin1String("none") && !binds::isBind(m_entry);
+    m_bindBox->setVisible(can);
+    {
+        const QSignalBlocker block(m_bindList);
+        m_bindList->clear();
+        for (const auto &b : std::as_const(m_binds)) {
+            new QTreeWidgetItem(m_bindList, {b.target, b.subfolder.isEmpty() ? i18n("(the whole drive)") : b.subfolder});
+        }
+    }
+    // Moving a mounted drive: offer to keep it reachable where it is now.
+    const bool moving = !m_mountedAt.isEmpty() && m_entry.mountPoint != m_mountedAt && !m_binds.contains(binds::Bind{QString(), m_mountedAt});
+    m_keepOld->setHidden(!(can && moving));
+    m_keepOld->setText(i18n("Keep it reachable at %1 too", m_mountedAt));
 }
 
 const drives::Volume *EntryEditor::matchingVolume() const
@@ -785,7 +967,9 @@ void EntryEditor::refresh()
     if (m_mountPoint->text() != m_entry.mountPoint) {
         m_mountPoint->setText(m_entry.mountPoint);
     }
-    m_mountPoint->setEnabled(!swap);
+    m_mountPointBox->setEnabled(!swap);
+    updateSuggestions();
+    refreshBinds();
     if (m_type->currentText() != m_entry.type) {
         m_type->setCurrentText(m_entry.type);
     }
@@ -920,7 +1104,11 @@ void EntryEditor::refresh()
     m_pass->setValue(m_entry.pass);
 
     // Preview and checks
-    m_preview->setText(QString::fromUtf8(fstab::formatEntry(m_entry, m_layout ? &*m_layout : nullptr)));
+    QString preview = QString::fromUtf8(fstab::formatEntry(m_entry, m_layout ? &*m_layout : nullptr));
+    for (const auto &b : binds()) {
+        preview += QLatin1Char('\n') + QString::fromUtf8(fstab::formatEntry(binds::makeEntry(m_entry, b)));
+    }
+    m_preview->setText(preview);
     const QList<Issue> list = issues();
     const KColorScheme scheme(QPalette::Active, KColorScheme::View);
     const QString red = scheme.foreground(KColorScheme::NegativeText).color().name();
@@ -1008,6 +1196,26 @@ QList<Issue> EntryEditor::issues() const
         // Found by tests/mounttest.cpp on kernel 7.0.
         warn(QStringLiteral("options"), i18n("The ntfs3 driver ignores these permissions for the drive's top folder: every user can create files there. "
                                              "Choose \"ntfs\" (ntfs-3g) as the file system if that matters."));
+    }
+    QStringList targets;
+    for (const auto &b : binds()) {
+        if (const QString e = binds::checkSubfolder(b.subfolder); !e.isEmpty()) {
+            error(QStringLiteral("binds"), e);
+        }
+        const auto zone = policy::classifyMountPoint(b.target);
+        if (zone.zone == policy::Zone::Invalid) {
+            error(QStringLiteral("binds"), i18n("Also show it at %1: %2", b.target, zone.reason));
+        } else if (zone.zone == policy::Zone::Blocked && !m_ctx.me.sudo) {
+            error(QStringLiteral("binds"), i18n("%1 is a protected system location.", b.target));
+        } else if (zone.zone == policy::Zone::Override && !m_ctx.me.fullAccess()) {
+            error(QStringLiteral("binds"), i18n("Only driveadmins and administrators may use %1.", b.target));
+        }
+        if (b.target == m_entry.mountPoint || targets.contains(b.target) || m_ctx.otherMountPoints.contains(b.target)) {
+            if (!m_ctx.binds.contains(b) || b.target == m_entry.mountPoint || targets.contains(b.target)) {
+                error(QStringLiteral("binds"), i18n("%1 is already used.", b.target));
+            }
+        }
+        targets.append(b.target);
     }
     if (m_entry.type == QLatin1String("none") && !m_entry.options.contains(QStringLiteral("bind")) && !m_entry.options.contains(QStringLiteral("rbind"))) {
         error(QStringLiteral("options"), i18n("A bind mount needs the 'bind' option (Advanced tab)."));

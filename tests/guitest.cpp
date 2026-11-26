@@ -431,7 +431,23 @@ private Q_SLOTS:
         QVERIFY(e);
         QCOMPARE(e->entry().spec, QStringLiteral("UUID=3f2a7d10-88c4-4b6e-a0d9-5e7b1c2f9c1e"));
         QCOMPARE(e->entry().type, QStringLiteral("btrfs"));
+        // Mounted by Dolphin right now: the default is where it is (SPEC §8), with others offered.
+        QCOMPARE(e->entry().mountPoint, QStringLiteral("/run/media/oarko/Lingames"));
+        auto *box = e->findChild<QComboBox *>(QStringLiteral("editor.mountPointBox"));
+        QStringList offered;
+        for (int i = 0; i < box->count(); ++i) {
+            offered.append(box->itemText(i));
+        }
+        QCOMPARE(offered.mid(0, 3), QStringList({QStringLiteral("/run/media/oarko/Lingames"), QStringLiteral("/mnt/Lingames"), QStringLiteral("/media/Lingames")}));
+        QVERIFY(e->findChild<QPushButton *>(QStringLiteral("editor.browse")));
+        QVERIFY(!e->findChild<QCheckBox *>(QStringLiteral("editor.keepOld"))->isVisible()); // not moving
+        // Choose /mnt/Lingames instead: offered to keep the old place reachable too.
+        box->setCurrentIndex(1);
+        Q_EMIT box->activated(1);
         QCOMPARE(e->entry().mountPoint, QStringLiteral("/mnt/Lingames"));
+        auto *keepOld = e->findChild<QCheckBox *>(QStringLiteral("editor.keepOld"));
+        QVERIFY(keepOld->isVisible());
+        QVERIFY(keepOld->text().contains(QLatin1String("/run/media/oarko/Lingames")));
         QCOMPARE(e->entry().options, QStringList{QStringLiteral("nofail")}); // safe default for new drives
         QVERIFY(e->findChild<QCheckBox *>(QStringLiteral("access.nofail"))->isChecked());
         screenshot(*e, QStringLiteral("editor-basic"));
@@ -468,6 +484,7 @@ private Q_SLOTS:
         QVERIFY(w.findChild<KMessageWidget *>(QStringLiteral("applyBar"))->isVisibleTo(&w));
         // New lines line up with the columns of the line above.
         const QByteArray expected = "LABEL=Lingames                            /mnt/Lingames  btrfs   nofail,noauto,x-systemd.automount,user,compress=zstd:3 0 0\n";
+        // (keepOld wasn't ticked: no bind line)
         QVERIFY2(w.pendingContent().endsWith(expected), w.pendingContent().constData());
         screenshot(w, QStringLiteral("pending"));
 
@@ -1064,6 +1081,76 @@ private Q_SLOTS:
         bar->actions().first()->trigger();
         QCOMPARE(src->calls, QStringList({QStringLiteral("unmount:/mnt/win"), QStringLiteral("mount:/mnt/win")}));
         QVERIFY(!bar->isVisibleTo(&w));
+    }
+
+    void bindsAreSavedWithTheDrive()
+    {
+        auto *src = new FixtureSource(true);
+        MainWindow w(src);
+        w.resize(1280, 800);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectTile(w, QStringLiteral("Lingames"));
+        EntryEditor *e = openEditor(w, [&w] { w.editSelected(); });
+        auto *box = e->findChild<QComboBox *>(QStringLiteral("editor.mountPointBox"));
+        box->setCurrentIndex(1); // /mnt/Lingames
+        Q_EMIT box->activated(1);
+        e->findChild<QCheckBox *>(QStringLiteral("editor.keepOld"))->setChecked(true);
+        e->addBind({QStringLiteral("SteamLibrary"), QStringLiteral("/home/oarko/Games")});
+        QCOMPARE(e->findChild<QTreeWidget *>(QStringLiteral("editor.binds"))->topLevelItemCount(), 1);
+        const QString preview = e->findChild<QLabel *>(QStringLiteral("editor.preview"))->text();
+        QVERIFY2(preview.contains(QLatin1String("/mnt/Lingames  /run/media/oarko/Lingames  none  bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames")),
+                 qPrintable(preview));
+        screenshot(*e, QStringLiteral("editor-binds"));
+        // A bind place that isn't a usable path is refused right away (protected locations
+        // are allowed for administrators, who confirm them when applying).
+        e->addBind({QString(), QStringLiteral("games")});
+        QVERIFY(!okButton(e)->isEnabled());
+        e->removeBind(1);
+        QVERIFY(okButton(e)->isEnabled());
+        e->accept();
+        QCoreApplication::processEvents();
+        const QByteArray out = w.pendingContent();
+        // New lines line up with the columns above (spacing aside, these are the lines).
+        const auto has = [](const QByteArray &file, const QByteArray &line) {
+            for (const QByteArray &l : file.split('\n')) {
+                if (l.simplified() == line) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        QVERIFY(has(out, "/mnt/Lingames/SteamLibrary /home/oarko/Games none bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames 0 0"));
+        QVERIFY(has(out, "/mnt/Lingames /run/media/oarko/Lingames none bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames 0 0"));
+
+        // The binds show up as their own tiles.
+        selectTile(w, QStringLiteral("Games"));
+        QVERIFY(w.findChild<QLabel *>(QStringLiteral("info.title"))->text() == QStringLiteral("Games"));
+
+        // Editing the drive again: its binds are listed, and they move with the drive.
+        selectTile(w, QStringLiteral("Lingames"));
+        e = openEditor(w, [&w] { w.editSelected(); });
+        QCOMPARE(e->binds().size(), 2);
+        typeInto(e->findChild<QLineEdit *>(QStringLiteral("editor.mountPoint")), QStringLiteral("/srv/Lingames"));
+        e->accept();
+        QCoreApplication::processEvents();
+        const QByteArray moved = w.pendingContent();
+        QVERIFY(has(moved, "/srv/Lingames/SteamLibrary /home/oarko/Games none bind,nofail,x-systemd.requires-mounts-for=/srv/Lingames 0 0"));
+        QVERIFY(!moved.contains("requires-mounts-for=/mnt/Lingames"));
+        QVERIFY(has(moved, "/srv/Lingames /run/media/oarko/Lingames none bind,nofail,x-systemd.requires-mounts-for=/srv/Lingames 0 0"));
+
+        // Removing a bind in the editor removes only its line.
+        e = openEditor(w, [&w] { w.editSelected(); });
+        e->removeBind(0);
+        e->accept();
+        QCoreApplication::processEvents();
+        QVERIFY(!w.pendingContent().contains("/home/oarko/Games"));
+        QVERIFY(w.pendingContent().contains("/run/media/oarko/Lingames"));
+
+        // Saved, the drive is test-mounted but its binds are not.
+        selectTile(w, QStringLiteral("Lingames"));
+        w.applyChanges();
+        QVERIFY(!src->calls.join(QLatin1Char(' ')).contains(QLatin1String("/run/media/oarko/Lingames")));
     }
 };
 

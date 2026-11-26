@@ -3,8 +3,12 @@
 add_library(anchorage_core STATIC
     access.cpp
     access.h
+    binds.cpp
+    binds.h
     linediff.cpp
     linediff.h
+    locations.cpp
+    locations.h
     options.cpp
     options.h
     verify.cpp

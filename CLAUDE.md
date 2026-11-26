@@ -15,7 +15,8 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
   entry editor (Basic/Access/Advanced, option catalogue) with pending changes and Apply,
   system-wide settings (`writesettings`), Backups page with side-by-side compare and restore,
   mounting (`mountentry`, `mounttemporary`, `unmount`; Mount At…; test mount after Apply
-  with Undo; Remount), SPEC §6.1.
+  with Undo; Remount), SPEC §6.1; mount-point suggestions (where it's mounted now first) with
+  Browse, and "Also show it at…" bind entries with the bind-source rule, SPEC §8.
   Next: a hands-on pass in the VM's Plasma session, then network shares (SPEC §11).
   Later: mounting removable drives as the user through UDisks (like Dolphin).
 - SMB share *creation* is a planned phase 2 feature (SPEC §16); keep v1 scope to mounting.
@@ -180,7 +181,9 @@ These come from the user's requirements and apply to every change:
   `users` vs `user`, and after a **reboot**: boot mounts, automount, a missing `nofail`
   drive and an unreachable NFS server not blocking start-up, then the mount actions
   (systemd automount path, "in use" naming the program, temporary mounts, typed
-  confirmation for /boot/efi, refusals for standard users), remove + restore.
+  confirmation for /boot/efi, refusals for standard users), binds (whole drive and a
+  folder on it; a missing drive's bind stays unmounted after the reboot; a standard user
+  can't bind /etc), remove + restore.
   Disk images are attached at boot by a oneshot unit before `local-fs-pre.target`.
 
 - Unit tests (QtTest) for the fstab parser/writer, especially round-trip preservation

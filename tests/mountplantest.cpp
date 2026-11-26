@@ -95,6 +95,15 @@ private Q_SLOTS:
         QVERIFY(!mounting::planMountEntry(fstabData, QStringLiteral("/home"), standard, current).ok()); // system
         QVERIFY(!mounting::planMountEntry(fstabData, QStringLiteral("/home"), driveadmin, current).ok()); // already mounted
         QVERIFY(!mounting::planMountEntry(fstabData, QStringLiteral("/mnt/../etc"), sudoer, current).ok());
+
+        // A bind waits for its drive (mount itself ignores requires-mounts-for).
+        const QByteArray withBind = fstabData + "/mnt/data /srv/data none bind,nofail,x-systemd.requires-mounts-for=/mnt/data 0 0\n";
+        p = mounting::planMountEntry(withBind, QStringLiteral("/srv/data"), standard, current);
+        QVERIFY(!p.ok());
+        QVERIFY(p.errors.join(QString()).contains(QLatin1String("Mount /mnt/data first")));
+        QList<mounts::Mount> driveMounted = current;
+        driveMounted.append(mnt("/dev/sdc1", "/mnt/data", "ext4"));
+        QVERIFY(mounting::planMountEntry(withBind, QStringLiteral("/srv/data"), standard, driveMounted).ok());
     }
 
     void temporaryMountRules_data()
