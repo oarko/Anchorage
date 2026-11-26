@@ -65,16 +65,23 @@ PreviewDialog::PreviewDialog(const QByteArray &oldText, const QByteArray &newTex
 }
 
 ProtectedConfirmDialog::ProtectedConfirmDialog(const QStringList &paths, QWidget *parent)
+    : ProtectedConfirmDialog(paths,
+                             i18n("Mount in a Protected Location?"),
+                             i18n("These mount points are inside protected system folders. Mounting something there can hide files the system "
+                                  "needs, or let the mounted drive change how the computer behaves."),
+                             i18n("Mount There"),
+                             parent)
+{
+}
+
+ProtectedConfirmDialog::ProtectedConfirmDialog(const QStringList &paths, const QString &title, const QString &explanation, const QString &okText, QWidget *parent)
     : QDialog(parent)
     , m_paths(paths)
 {
     setObjectName(QStringLiteral("confirmProtected"));
-    setWindowTitle(i18n("Mount in a Protected Location?"));
+    setWindowTitle(title);
     auto *v = new QVBoxLayout(this);
-    auto *text = new QLabel(i18n("These mount points are inside protected system folders. Mounting something there can hide files the system "
-                                 "needs, or let the mounted drive change how the computer behaves.<br><br>"
-                                 "Type each path exactly to confirm:"),
-                            this);
+    auto *text = new QLabel(explanation + QStringLiteral("<br><br>") + i18n("Type each path exactly to confirm:"), this);
     text->setWordWrap(true);
     v->addWidget(text);
     auto *form = new QFormLayout;
@@ -90,7 +97,7 @@ ProtectedConfirmDialog::ProtectedConfirmDialog(const QStringList &paths, QWidget
     v->addLayout(form);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     m_ok = buttons->button(QDialogButtonBox::Ok);
-    m_ok->setText(i18n("Mount There"));
+    m_ok->setText(okText);
     m_ok->setEnabled(false);
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);

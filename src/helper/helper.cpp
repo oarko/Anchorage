@@ -95,7 +95,55 @@ public Q_SLOTS:
         return ActionReply::SuccessReply();
     }
 
+    ActionReply mountentry(const QVariantMap &args)
+    {
+        const auto mountPoint = requests::decodeMountPoint(args);
+        if (!mountPoint) {
+            return error(mountPoint.error());
+        }
+        const auto caller = who();
+        if (!caller) {
+            return error(caller.error());
+        }
+        return mountReply(service::mountEntry(service::systemPaths(), *caller, *mountPoint, service::systemRunner()));
+    }
+
+    ActionReply mounttemporary(const QVariantMap &args)
+    {
+        const auto request = requests::decodeTemporaryMount(args);
+        if (!request) {
+            return error(request.error());
+        }
+        const auto caller = who();
+        if (!caller) {
+            return error(caller.error());
+        }
+        return mountReply(service::mountTemporary(service::systemPaths(), *caller, request->entry, request->confirmProtected, service::systemRunner()));
+    }
+
+    ActionReply unmount(const QVariantMap &args)
+    {
+        const auto request = requests::decodeUnmount(args);
+        if (!request) {
+            return error(request.error());
+        }
+        const auto caller = who();
+        if (!caller) {
+            return error(caller.error());
+        }
+        return mountReply(service::unmount(service::systemPaths(), *caller, request->mountPoint, request->confirmSystem, service::systemRunner()));
+    }
+
 private:
+    static ActionReply mountReply(const service::MountOutcome &outcome)
+    {
+        ActionReply r = outcome.ok() ? ActionReply::SuccessReply() : error(outcome.errors.join(QLatin1Char('\n')));
+        r.addData(QStringLiteral("errors"), outcome.errors);
+        r.addData(QStringLiteral("createdDirs"), outcome.createdDirs);
+        r.addData(QStringLiteral("processes"), outcome.processes);
+        return r;
+    }
+
     static Result<Caller> who()
     {
         const int uid = KAuth::HelperSupport::callerUid();

@@ -13,9 +13,11 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
 - Design agreed: layout C (Dolphin-like, QtWidgets), see SPEC §15.
 - Done: fstab reader/writer, root helper + permission rules, drive detection, main window,
   entry editor (Basic/Access/Advanced, option catalogue) with pending changes and Apply,
-  system-wide settings (`writesettings`), Backups page with side-by-side compare and restore.
-  Next: test mount after saving with an undo offer (SPEC §9, needs a helper mount action),
-  then network shares (SPEC §11).
+  system-wide settings (`writesettings`), Backups page with side-by-side compare and restore,
+  mounting (`mountentry`, `mounttemporary`, `unmount`; Mount At…; test mount after Apply
+  with Undo; Remount), SPEC §6.1.
+  Next: a hands-on pass in the VM's Plasma session, then network shares (SPEC §11).
+  Later: mounting removable drives as the user through UDisks (like Dolphin).
 - SMB share *creation* is a planned phase 2 feature (SPEC §16); keep v1 scope to mounting.
 - Ask the user before starting implementation.
 
@@ -168,11 +170,17 @@ These come from the user's requirements and apply to every change:
     the top folder as 0777 whatever the umask (editor warns, test records it).
   Unprivileged user namespaces don't work here: Ubuntu sets
   `kernel.apparmor_restrict_unprivileged_userns=1`.
+- **Mount rules**: `tests/mountplantest.cpp` checks who may mount what and the exact
+  commands the service runs (fake runner); `mounttest.cpp::serviceMountsForReal` runs them
+  for real as root in the privileged container, including "in use" with a live process.
+  The service always runs `mount --fstab <the fstab it read>`, so tests can use proxy files.
 - **Editor end-to-end**: `tests/vm/editor.sh` (~12 min) builds entries with the editor's
   code (`anchorage-e2e-client edit`, the GUI's `anchorage::client` KAuth path), saves them
   with real password prompts, then checks user mounts (alice/nora via `sudo -u`), owners,
   `users` vs `user`, and after a **reboot**: boot mounts, automount, a missing `nofail`
-  drive and an unreachable NFS server not blocking start-up, remove + restore.
+  drive and an unreachable NFS server not blocking start-up, then the mount actions
+  (systemd automount path, "in use" naming the program, temporary mounts, typed
+  confirmation for /boot/efi, refusals for standard users), remove + restore.
   Disk images are attached at boot by a oneshot unit before `local-fs-pre.target`.
 
 - Unit tests (QtTest) for the fstab parser/writer, especially round-trip preservation

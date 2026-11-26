@@ -6,6 +6,7 @@ ecm_add_tests(
     servicetest.cpp
     inventorytest.cpp
     optionstest.cpp
+    mountplantest.cpp
     LINK_LIBRARIES anchorage_core anchorage_hardening Qt6::Test
 )
 

@@ -27,6 +27,8 @@ class ProtectedConfirmDialog : public QDialog
 
 public:
     explicit ProtectedConfirmDialog(const QStringList &paths, QWidget *parent = nullptr);
+    // Same, with another explanation and button (e.g. unmounting a system entry).
+    ProtectedConfirmDialog(const QStringList &paths, const QString &title, const QString &explanation, const QString &okText, QWidget *parent = nullptr);
 
 private:
     QStringList m_paths;

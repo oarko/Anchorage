@@ -58,6 +58,12 @@ public:
     virtual void writeFstab(const anchorage::requests::WriteFstab &request, QWidget *window, Done done) = 0;
     virtual void restoreBackup(const anchorage::requests::Restore &request, QWidget *window, Done done) = 0;
     virtual void writeSettings(const anchorage::settings::Settings &settings, QWidget *window, Done done) = 0;
+    // Mounting through the helper (SPEC §6.1). Reply data: "processes" when in use.
+    virtual void mountEntry(const QString &mountPoint, QWidget *window, Done done) = 0;
+    virtual void mountTemporary(const anchorage::requests::TemporaryMount &request, QWidget *window, Done done) = 0;
+    virtual void unmount(const anchorage::requests::Unmount &request, QWidget *window, Done done) = 0;
+    // Entries marked "any user": /usr/bin/mount and /usr/bin/umount run as the person.
+    virtual void userMount(const QString &mountPoint, bool mount, Done done) = 0;
     // findmnt --verify on a proposed file (SPEC §9 "Validate before writing").
     virtual QList<anchorage::verify::Finding> verify(const QByteArray &content) = 0;
 
@@ -81,6 +87,10 @@ public:
     void writeFstab(const anchorage::requests::WriteFstab &request, QWidget *window, Done done) override;
     void restoreBackup(const anchorage::requests::Restore &request, QWidget *window, Done done) override;
     void writeSettings(const anchorage::settings::Settings &settings, QWidget *window, Done done) override;
+    void mountEntry(const QString &mountPoint, QWidget *window, Done done) override;
+    void mountTemporary(const anchorage::requests::TemporaryMount &request, QWidget *window, Done done) override;
+    void unmount(const anchorage::requests::Unmount &request, QWidget *window, Done done) override;
+    void userMount(const QString &mountPoint, bool mount, Done done) override;
     QList<anchorage::verify::Finding> verify(const QByteArray &content) override;
 
 private:

@@ -12,6 +12,9 @@
 //                             [opt=<option>]... [--confirm]
 //   anchorage-e2e-client edit-remove <mount-point>
 //   anchorage-e2e-client settings <keep-backups> <ntfs3|ntfs>
+//   anchorage-e2e-client mount-entry <mount-point>
+//   anchorage-e2e-client mount-temp <spec> <mount-point> <type> [opt1,opt2,...] [--confirm]
+//   anchorage-e2e-client unmount <mount-point> [--confirm]
 //
 // "edit" builds the entry the way the entry editor does (access::defaultsFor, then
 // access::apply for the Access tab choices, opt= for the Advanced tab), adds it or
@@ -177,6 +180,16 @@ int main(int argc, char *argv[])
         st.keepBackups = args.at(2).toInt();
         st.ntfsDriver = args.at(3);
         request = requests::encodeSettings(st);
+    } else if (cmd == QLatin1String("mount-entry")) {
+        action = QStringLiteral("mountentry");
+        request = requests::encodeMountPoint(args.at(2));
+    } else if (cmd == QLatin1String("mount-temp") && args.size() >= 5) {
+        action = QStringLiteral("mounttemporary");
+        const QString opts = args.size() >= 6 && !args.at(5).startsWith(QLatin1String("--")) ? args.at(5) : QString();
+        request = requests::encodeTemporaryMount({{args.at(2), args.at(3), args.at(4), opts.split(QLatin1Char(','), Qt::SkipEmptyParts), 0, 0}, confirm});
+    } else if (cmd == QLatin1String("unmount")) {
+        action = QStringLiteral("unmount");
+        request = requests::encodeUnmount({args.at(2), confirm});
     } else if (cmd == QLatin1String("restore")) {
         action = QStringLiteral("restorebackup");
         request = requests::encodeRestore({args.at(2), confirm});
@@ -202,7 +215,10 @@ int main(int argc, char *argv[])
                                                     {QStringLiteral("addsharedmount"), client::Action::AddSharedMount},
                                                     {QStringLiteral("removesharedmount"), client::Action::RemoveSharedMount},
                                                     {QStringLiteral("restorebackup"), client::Action::RestoreBackup},
-                                                    {QStringLiteral("writesettings"), client::Action::WriteSettings}};
+                                                    {QStringLiteral("writesettings"), client::Action::WriteSettings},
+                                                    {QStringLiteral("mountentry"), client::Action::MountEntry},
+                                                    {QStringLiteral("mounttemporary"), client::Action::MountTemporary},
+                                                    {QStringLiteral("unmount"), client::Action::Unmount}};
     const client::Reply reply = client::runBlocking(actions.value(action), request);
     if (!reply.ok()) {
         QString message = reply.message;

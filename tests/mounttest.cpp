@@ -11,6 +11,7 @@
 //  * optionSweep: every catalogue option for the type (unless marked "skip"), one at a
 //    time, so a typo or an option the kernel doesn't know fails the test.
 #include "access.h"
+#include "fstabservice.h"
 #include "fstab.h"
 #include "options.h"
 
@@ -211,6 +212,8 @@ private Q_SLOTS:
         for (const Image &i : std::as_const(m_images)) {
             unmount(QStringLiteral("/mnt/anchorage-test/") + i.type);
         }
+        unmount(QStringLiteral("/mnt/anchorage-svc/entry"));
+        unmount(QStringLiteral("/mnt/anchorage-svc/temporary"));
     }
 
     void cleanupTestCase()
@@ -326,6 +329,78 @@ private Q_SLOTS:
             QVERIFY(!mountPulled && automountPulled);
             break;
         }
+    }
+
+    // The helper's mount actions (src/core/fstabservice.cpp) with the real commands, as
+    // root: an fstab entry, a temporary mount, "in use", and the refusals.
+    void serviceMountsForReal()
+    {
+        const Image *img = image(QStringLiteral("ext4"));
+        if (!img) {
+            QSKIP("no ext4 image in this run");
+        }
+        service::Paths paths;
+        paths.fstabDir = m_dir.path();
+        paths.fstabName = QStringLiteral("fstab");
+        paths.configDir = m_dir.filePath(QStringLiteral("anchorage"));
+        paths.backupDir = m_dir.filePath(QStringLiteral("anchorage/backups"));
+        Caller admin;
+        admin.driveAdmin = true;
+        Caller standard;
+        const QString mp = QStringLiteral("/mnt/anchorage-svc/entry");
+        const QString tmp = QStringLiteral("/mnt/anchorage-svc/temporary");
+        QFile f(m_fstab);
+        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(QStringLiteral("%1 %2 ext4 nofail 0 0\n").arg(img->spec, mp).toUtf8());
+        f.close();
+        const auto run = service::systemRunner();
+
+        // fstab entry, by a standard user (who passed polkit); the folder is created.
+        auto o = service::mountEntry(paths, standard, mp, run);
+        QVERIFY2(o.ok(), qPrintable(o.errors.join(QLatin1Char(' '))));
+        QVERIFY(mountedOptions(mp));
+        QCOMPARE(o.createdDirs.isEmpty(), false);
+        QVERIFY(!service::mountEntry(paths, standard, mp, run).ok()); // already mounted
+
+        // In use: a program with its working directory there is named, and nothing changes.
+        QProcess holder;
+        holder.setWorkingDirectory(mp);
+        holder.start(QStringLiteral("/usr/bin/sleep"), {QStringLiteral("60")});
+        QVERIFY(holder.waitForStarted());
+        o = service::unmount(paths, standard, mp, false, run);
+        QVERIFY(!o.ok());
+        QVERIFY2(o.processes.contains(QStringLiteral("sleep")), qPrintable(o.processes.join(QLatin1Char(','))));
+        QVERIFY(mountedOptions(mp));
+        holder.kill();
+        holder.waitForFinished();
+        o = service::unmount(paths, standard, mp, false, run);
+        QVERIFY2(o.ok(), qPrintable(o.errors.join(QLatin1Char(' '))));
+        QVERIFY(!mountedOptions(mp));
+
+        // Temporary mount of the same drive elsewhere: driveadmins only.
+        const fstab::Entry t{img->spec, tmp, QStringLiteral("ext4"), {QStringLiteral("ro"), QStringLiteral("noatime")}, 0, 0};
+        QVERIFY(!service::mountTemporary(paths, standard, t, false, run).ok());
+        o = service::mountTemporary(paths, admin, t, false, run);
+        QVERIFY2(o.ok(), qPrintable(o.errors.join(QLatin1Char(' '))));
+        const auto opts = mountedOptions(tmp);
+        QVERIFY(opts && opts->contains(QStringLiteral("ro")) && opts->contains(QStringLiteral("noatime")));
+        QVERIFY(!service::unmount(paths, standard, tmp, false, run).ok()); // not in fstab: driveadmins only
+        QVERIFY(service::unmount(paths, admin, tmp, false, run).ok());
+        QVERIFY(!mountedOptions(tmp));
+
+        // A wrong file system type: mount's own message comes back.
+        fstab::Entry wrong = t;
+        wrong.type = QStringLiteral("vfat");
+        o = service::mountTemporary(paths, admin, wrong, false, run);
+        QVERIFY(!o.ok());
+        QVERIFY2(o.errors.join(QString()).contains(QLatin1String("wrong fs type")) || o.errors.join(QString()).contains(QLatin1String("bad superblock")),
+                 qPrintable(o.errors.join(QLatin1Char(' '))));
+        QVERIFY(!mountedOptions(tmp));
+
+        // Pseudo file systems are refused even for administrators.
+        Caller root;
+        root.sudo = true;
+        QVERIFY(!service::unmount(paths, root, QStringLiteral("/proc"), true, run).ok());
     }
 
     void optionSweep_data()

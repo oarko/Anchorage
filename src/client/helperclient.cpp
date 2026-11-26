@@ -95,6 +95,12 @@ QString actionId(Action action)
         return prefix + QStringLiteral("removesharedmount");
     case Action::WriteSettings:
         return prefix + QStringLiteral("writesettings");
+    case Action::MountEntry:
+        return prefix + QStringLiteral("mountentry");
+    case Action::MountTemporary:
+        return prefix + QStringLiteral("mounttemporary");
+    case Action::Unmount:
+        return prefix + QStringLiteral("unmount");
     }
     return {};
 }

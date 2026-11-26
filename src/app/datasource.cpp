@@ -9,6 +9,8 @@
 
 #include <QFile>
 #include <QFileSystemWatcher>
+#include <QProcess>
+#include <QWindow>
 #include <QSocketNotifier>
 #include <QWidget>
 
@@ -157,4 +159,51 @@ void SystemDataSource::writeSettings(const settings::Settings &s, QWidget *windo
 {
     client::run(client::Action::WriteSettings, requests::encodeSettings(s), window ? window->window()->windowHandle() : nullptr, this,
                 std::move(done));
+}
+
+namespace
+{
+QWindow *windowOf(QWidget *w)
+{
+    return w ? w->window()->windowHandle() : nullptr;
+}
+} // namespace
+
+void SystemDataSource::mountEntry(const QString &mountPoint, QWidget *window, Done done)
+{
+    client::run(client::Action::MountEntry, requests::encodeMountPoint(mountPoint), windowOf(window), this, std::move(done));
+}
+
+void SystemDataSource::mountTemporary(const requests::TemporaryMount &request, QWidget *window, Done done)
+{
+    client::run(client::Action::MountTemporary, requests::encodeTemporaryMount(request), windowOf(window), this, std::move(done));
+}
+
+void SystemDataSource::unmount(const requests::Unmount &request, QWidget *window, Done done)
+{
+    client::run(client::Action::Unmount, requests::encodeUnmount(request), windowOf(window), this, std::move(done));
+}
+
+void SystemDataSource::userMount(const QString &mountPoint, bool mount, Done done)
+{
+    // Exactly what the person could do in a terminal; mount and umount check the
+    // user/users options themselves.
+    auto *p = new QProcess(this);
+    p->setProcessChannelMode(QProcess::MergedChannels);
+    connect(p, &QProcess::finished, this, [p, done = std::move(done)](int code, QProcess::ExitStatus status) {
+        client::Reply r;
+        r.status = (status == QProcess::NormalExit && code == 0) ? client::Reply::Status::Ok : client::Reply::Status::Failed;
+        r.message = QString::fromUtf8(p->readAll()).trimmed();
+        if (r.message.contains(QLatin1String("busy"))) {
+            r.data.insert(QStringLiteral("busy"), true);
+        }
+        p->deleteLater();
+        done(r);
+    });
+    connect(p, &QProcess::errorOccurred, this, [p](QProcess::ProcessError e) {
+        if (e == QProcess::FailedToStart) {
+            Q_EMIT p->finished(127, QProcess::CrashExit);
+        }
+    });
+    p->start(mount ? QStringLiteral("/usr/bin/mount") : QStringLiteral("/usr/bin/umount"), {mountPoint});
 }
