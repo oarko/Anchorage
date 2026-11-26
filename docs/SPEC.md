@@ -120,6 +120,9 @@ How `writefstab` decides (`policy::planFstabWrite`):
   (folder must be empty or new); blocked zone for sudo with `confirmProtected` only.
 - Everyone else who passes polkit (a standard user with an admin's password) can change
   non-system entries in the safe zone.
+- **Bind sources** (agreed 2026-11-26): a new or changed `bind`/`rbind` entry must show a
+  folder from the safe zone or from inside another (non-system) entry's mount point;
+  anything else (system folders) is for driveadmins/sudo only.
 
 Shared mounts (`policy::planSharedMount`): network type only; `/mnt/<one folder>`; options
 from an allow-list only; `uid`/`gid` only the caller's own; `credentials=` only the caller's
@@ -203,6 +206,20 @@ General rules for every zone:
   - **Advanced**: every option for the filesystem type with description, default, and
     valid values, including rarely used SMB/NFS options.
 - Drives are identified by `UUID=` by default (with an option for `LABEL=`/`PARTUUID=`/path).
+- **Mount point** (agreed 2026-11-26): an editable list with a Browse button. For a drive
+  that is mounted right now, the default is **where it is mounted** (e.g.
+  `/run/media/oarko/Lingames`; UDisks then uses the fstab entry, so Dolphin keeps the same
+  path). The list also offers `/mnt/<label>`, `/media/<label>` and the personal UDisks
+  location, detected (§5) rather than assumed: `/run/media/<user>` (UDisks' default: Fedora,
+  Arch, openSUSE, NixOS, SteamOS, Kubuntu 26.04) or `/media/<user>` (Debian, Mint, older
+  Ubuntu). Immutable distributions (`/mnt` -> `/var/mnt`) are out of scope for now.
+- **Also show it at… (bind mounts)**: extra locations in the drive's editor, each saved as
+  its own entry, e.g. `/mnt/Lingames  /run/media/oarko/Lingames  none
+  bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames  0 0`. The `requires-mounts-for`
+  stops a missing drive's empty folder being shown instead. A bind may show a sub-folder
+  ("Folder on the drive", empty = whole drive). Binds follow the drive's "when it mounts"
+  choice. When a mounted drive is given a new mount point, the editor offers to keep it
+  reachable at the old location too. Bind entries also appear as their own tiles.
 
 Implemented (2026-11-25) in `src/app/entryeditor.*`, `src/core/access.*`, `src/core/options.*`:
 - **Option catalogue**: `src/core/data/filesystems.json` (21 types) and `options.json` (~390

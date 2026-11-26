@@ -212,6 +212,7 @@ private Q_SLOTS:
         for (const Image &i : std::as_const(m_images)) {
             unmount(QStringLiteral("/mnt/anchorage-test/") + i.type);
         }
+        unmount(QStringLiteral("/mnt/anchorage-svc/bind"));
         unmount(QStringLiteral("/mnt/anchorage-svc/entry"));
         unmount(QStringLiteral("/mnt/anchorage-svc/temporary"));
     }
@@ -376,6 +377,34 @@ private Q_SLOTS:
         o = service::unmount(paths, standard, mp, false, run);
         QVERIFY2(o.ok(), qPrintable(o.errors.join(QLatin1Char(' '))));
         QVERIFY(!mountedOptions(mp));
+
+        // A bind of a folder on the drive: refused while the drive isn't mounted (mount would
+        // show the empty folder), then shows the drive's files.
+        const QString bindTarget = QStringLiteral("/mnt/anchorage-svc/bind");
+        QFile fb(m_fstab);
+        QVERIFY(fb.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        fb.write(QStringLiteral("%1 %2 ext4 nofail 0 0\n%2/shared %3 none bind,nofail,x-systemd.requires-mounts-for=%2 0 0\n")
+                     .arg(img->spec, mp, bindTarget)
+                     .toUtf8());
+        fb.close();
+        o = service::mountEntry(paths, standard, bindTarget, run);
+        QVERIFY(!o.ok());
+        QVERIFY2(o.errors.join(QString()).contains(QLatin1String("first")), qPrintable(o.errors.join(QLatin1Char(' '))));
+        QVERIFY(!mountedOptions(bindTarget));
+        QVERIFY(service::mountEntry(paths, standard, mp, run).ok());
+        QVERIFY(QDir().mkpath(mp + QStringLiteral("/shared")));
+        QFile marker(mp + QStringLiteral("/shared/marker"));
+        QVERIFY(marker.open(QIODevice::WriteOnly));
+        marker.write("on the drive");
+        marker.close();
+        o = service::mountEntry(paths, standard, bindTarget, run);
+        QVERIFY2(o.ok(), qPrintable(o.errors.join(QLatin1Char(' '))));
+        QFile seen(bindTarget + QStringLiteral("/marker"));
+        QVERIFY(seen.open(QIODevice::ReadOnly));
+        QCOMPARE(seen.readAll(), QByteArray("on the drive"));
+        seen.close();
+        QVERIFY(service::unmount(paths, standard, bindTarget, false, run).ok());
+        QVERIFY(service::unmount(paths, standard, mp, false, run).ok());
 
         // Temporary mount of the same drive elsewhere: driveadmins only.
         const fstab::Entry t{img->spec, tmp, QStringLiteral("ext4"), {QStringLiteral("ro"), QStringLiteral("noatime")}, 0, 0};

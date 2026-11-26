@@ -2,6 +2,7 @@
 #pragma once
 
 #include "access.h"
+#include "binds.h"
 #include "caller.h"
 #include "datasource.h"
 #include "drives.h"
@@ -32,6 +33,8 @@ struct EditorContext {
     bool systemUnlocked = false; // "Allow editing system entries" is on
     QList<Account> users; // people who can own files (Access tab)
     QString ntfsDriver = QStringLiteral("ntfs3"); // suggested for NTFS drives (settings)
+    QList<anchorage::mounts::Mount> mounts; // what is mounted now
+    QList<anchorage::binds::Bind> binds; // existing "also show it at" entries of this drive
 };
 
 // The entry editor dialog (SPEC §8, §15): Basic / Access / Advanced tabs and a live
@@ -59,6 +62,12 @@ public:
     enum class IdentifyBy { Uuid, Label, PartUuid, Path };
     static QString specFor(const anchorage::drives::Volume &volume, IdentifyBy by);
 
+    // "Also show it at…" (bind entries saved with this one), including "keep it at the
+    // old place too" when that is ticked.
+    QList<anchorage::binds::Bind> binds() const;
+    void addBind(const anchorage::binds::Bind &bind);
+    void removeBind(int index);
+
     // Asks for confirmation first when ntfs3 is combined with restrictive permissions.
     // (QDialog::accept is already a virtual slot.)
     void accept() override;
@@ -75,6 +84,8 @@ private:
     void advancedItemChanged(QTreeWidgetItem *item, int column);
     void showOptionDetails();
     const anchorage::drives::Volume *matchingVolume() const;
+    void updateSuggestions();
+    void refreshBinds();
 
     anchorage::fstab::Entry m_entry;
     anchorage::fstab::Entry m_initial;
@@ -91,7 +102,13 @@ private:
     QLineEdit *m_spec;
     QComboBox *m_identify;
     QLabel *m_specHint;
-    QLineEdit *m_mountPoint;
+    QComboBox *m_mountPointBox;
+    QLineEdit *m_mountPoint; // the box's text field
+    QWidget *m_bindBox;
+    QTreeWidget *m_bindList;
+    QCheckBox *m_keepOld;
+    QList<anchorage::binds::Bind> m_binds;
+    QString m_mountedAt; // where the drive is mounted now (outside the system folders)
     QLabel *m_zone;
     QComboBox *m_type;
     QLabel *m_typeInfo;

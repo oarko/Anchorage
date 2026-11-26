@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "inventorymodel.h"
 
+#include "binds.h"
+
 #include <KLocalizedString>
 
 using namespace anchorage::inventory;
@@ -85,6 +87,9 @@ QString InventoryModel::subtitle(const Item &it)
                                                                          : it.source.section(QLatin1Char(':'), 0, 0);
         return proto.isEmpty() ? server : i18nc("protocol · server", "%1 · %2", proto, server);
     }
+    if (it.entry && anchorage::binds::isBind(*it.entry)) {
+        return i18nc("bind mount: the same files as another folder", "Bind · shows %1", it.entry->spec);
+    }
     const QString fs = it.volume ? it.volume->fsType : (it.entry ? it.entry->type : QString());
     QString what;
     if (it.system) {
@@ -112,6 +117,9 @@ QIcon InventoryModel::icon(const Item &it)
     };
     if (it.kind == Kind::Network) {
         return themed({"folder-network", "network-server"});
+    }
+    if (it.entry && anchorage::binds::isBind(*it.entry)) {
+        return themed({"folder-link", "inode-symlink", "folder"});
     }
     if (it.kind == Kind::Swap) {
         return themed({"media-flash", "drive-harddisk"});

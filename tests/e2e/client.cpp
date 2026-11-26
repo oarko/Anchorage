@@ -9,7 +9,7 @@
 //   anchorage-e2e-client restore <backup-name> [--confirm]
 //   anchorage-e2e-client edit <spec> <mount-point> <type> <boot|request|opened> <admins|user|users>
 //                             [nofail=0|1] [netdev=0|1] [uid=N] [gid=N] [sharing=owner|read|everyone]
-//                             [opt=<option>]... [--confirm]
+//                             [opt=<option>]... [bind=<target>[:<folder on the drive>]]... [--confirm]
 //   anchorage-e2e-client edit-remove <mount-point>
 //   anchorage-e2e-client settings <keep-backups> <ntfs3|ntfs>
 //   anchorage-e2e-client mount-entry <mount-point>
@@ -30,6 +30,7 @@
 #include "config-anchorage.h"
 #include "fstabservice.h"
 #include "access.h"
+#include "binds.h"
 #include "helperclient.h"
 #include "requests.h"
 
@@ -101,6 +102,7 @@ QByteArray editFstab(const QByteArray &current, const QStringList &args, QString
     s.start = starts.value(args.at(5));
     s.who = whos.value(args.at(6));
     QStringList extra;
+    QList<binds::Bind> wantedBinds;
     for (const QString &a : args.mid(7)) {
         const QString key = a.section(QLatin1Char('='), 0, 0);
         const QString value = a.section(QLatin1Char('='), 1);
@@ -116,6 +118,8 @@ QByteArray editFstab(const QByteArray &current, const QStringList &args, QString
             s.sharing = sharings.value(value);
         } else if (key == QLatin1String("opt")) {
             extra.append(value);
+        } else if (key == QLatin1String("bind")) {
+            wantedBinds.append({value.section(QLatin1Char(':'), 1), value.section(QLatin1Char(':'), 0, 0)});
         }
     }
     e.options = access::apply(base, s, e.type);
@@ -128,6 +132,10 @@ QByteArray editFstab(const QByteArray &current, const QStringList &args, QString
     const bool ok = existing >= 0 ? file.replace(existing, e, &issues) : file.append(e, &issues) >= 0;
     if (!ok) {
         *error = issues.isEmpty() ? QStringLiteral("refused") : issues.first().message;
+        return {};
+    }
+    // The same code the editor uses for "Also show it at…".
+    if (!wantedBinds.isEmpty() && !binds::apply(file, existing >= 0 ? mountPoint : QString(), e, wantedBinds, error)) {
         return {};
     }
     return file.serialize();

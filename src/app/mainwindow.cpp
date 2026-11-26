@@ -14,6 +14,7 @@
 #include "mountatdialog.h"
 #include "mountplan.h"
 #include "access.h"
+#include "binds.h"
 #include "options.h"
 #include "tiledelegate.h"
 
@@ -453,6 +454,7 @@ EditorContext MainWindow::editorContext(int editedLine) const
     ctx.systemUnlocked = m_systemUnlocked;
     ctx.users = m_snapshot.accounts;
     ctx.ntfsDriver = m_snapshot.settings.ntfsDriver;
+    ctx.mounts = m_snapshot.mounts;
     const fstab::File file = fstab::File::parse(currentContent());
     for (const int i : file.entryLines()) {
         const auto &entry = file.lines().at(static_cast<std::size_t>(i)).entry;
@@ -465,6 +467,13 @@ EditorContext MainWindow::editorContext(int editedLine) const
         }
         if (i != editedLine && e.type != QLatin1String("swap")) {
             ctx.otherMountPoints.append(e.mountPoint);
+        }
+    }
+    if (editedLine >= 0) {
+        if (const auto &edited = file.lines().at(static_cast<std::size_t>(editedLine)).entry) {
+            for (const auto &[line, b] : binds::findFor(file, edited->mountPoint)) {
+                ctx.binds.append(b);
+            }
         }
     }
     return ctx;
@@ -493,7 +502,7 @@ void MainWindow::newEntry()
     connect(editor, &QDialog::accepted, this, [this, editor] {
         fstab::File file = fstab::File::parse(currentContent());
         const int line = file.append(editor->entry());
-        if (line >= 0) {
+        if (line >= 0 && binds::apply(file, QString(), editor->entry(), editor->binds())) {
             m_selectedId = QStringLiteral("fstab:%1").arg(line);
             setPending(file.serialize());
         }
@@ -541,7 +550,8 @@ void MainWindow::editItem(const inventory::Item &item)
     editor->setAttribute(Qt::WA_DeleteOnClose);
     const int lineIndex = item.fstabLine;
     const bool isNew = !item.entry;
-    connect(editor, &QDialog::accepted, this, [this, editor, lineIndex, isNew] {
+    const QString oldMountPoint = item.entry ? item.entry->mountPoint : QString();
+    connect(editor, &QDialog::accepted, this, [this, editor, lineIndex, isNew, oldMountPoint] {
         fstab::File f = fstab::File::parse(currentContent());
         if (isNew) {
             const int line = f.append(editor->entry());
@@ -550,6 +560,10 @@ void MainWindow::editItem(const inventory::Item &item)
             }
             m_selectedId = QStringLiteral("fstab:%1").arg(line);
         } else if (!f.replace(lineIndex, editor->entry())) {
+            return;
+        }
+        // The drive's "also show it at" entries follow it (and move with its mount point).
+        if (!binds::isBind(editor->entry()) && !binds::apply(f, oldMountPoint, editor->entry(), editor->binds())) {
             return;
         }
         setPending(f.serialize());
@@ -976,7 +990,9 @@ void MainWindow::testMount(const QList<fstab::Entry> &entries, const QString &ba
     QList<fstab::Entry> toTest;
     QStringList remount;
     for (const fstab::Entry &e : entries) {
-        if (e.type == QLatin1String("swap")) {
+        // Swap isn't mounted; a bind only shows a folder, which the helper won't do while its
+        // drive is unmounted (and test-unmounting the drive first would make that likely).
+        if (e.type == QLatin1String("swap") || binds::isBind(e)) {
             continue;
         }
         if (mounting::mountedAt(m_snapshot.mounts, e.mountPoint)) {
