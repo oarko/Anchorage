@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mainwindow.h"
 
+#include "applydialogs.h"
 #include "backupspage.h"
+#include "entryeditor.h"
+#include "fstabservice.h"
 #include "infopanel.h"
 #include "inventorymodel.h"
+#include "linediff.h"
+#include "mountpolicy.h"
 #include "placespanel.h"
 #include "tiledelegate.h"
 
@@ -11,16 +16,20 @@
 #include <KCategorizedView>
 #include <KCategoryDrawer>
 #include <KLocalizedString>
+#include <KMessageBox>
 #include <KMessageWidget>
 #include <KStandardAction>
+#include <KToggleAction>
 
 #include <QApplication>
 #include <QClipboard>
+#include <QCloseEvent>
 #include <QDesktopServices>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QScrollArea>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -56,6 +65,22 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
     topLayout->addWidget(m_search);
     outer->addWidget(top);
 
+    // Apply bar and the system-editing warning sit above everything, like Dolphin's.
+    m_applyBar = new KMessageWidget(central);
+    m_applyBar->setObjectName(QStringLiteral("applyBar"));
+    m_applyBar->setCloseButtonVisible(false);
+    m_applyBar->setWordWrap(true);
+    m_applyBar->hide();
+    m_systemBanner = new KMessageWidget(central);
+    m_systemBanner->setObjectName(QStringLiteral("systemBanner"));
+    m_systemBanner->setMessageType(KMessageWidget::Error);
+    m_systemBanner->setCloseButtonVisible(false);
+    m_systemBanner->setWordWrap(true);
+    m_systemBanner->setText(i18n("Editing system entries is switched on. A mistake in these entries can stop the computer from starting."));
+    m_systemBanner->hide();
+    outer->addWidget(m_applyBar);
+    outer->addWidget(m_systemBanner);
+
     auto *split = new QSplitter(Qt::Horizontal, central);
     m_places = new PlacesPanel(split);
 
@@ -65,6 +90,7 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
     auto *tilesLayout = new QVBoxLayout(tilesPage);
     tilesLayout->setContentsMargins(0, 0, 0, 0);
     m_banner = new KMessageWidget(tilesPage);
+    m_banner->setObjectName(QStringLiteral("banner"));
     m_banner->setCloseButtonVisible(false);
     m_banner->setWordWrap(true);
     m_tiles = new KCategorizedView(tilesPage);
@@ -87,10 +113,17 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
     m_pages->addWidget(tilesPage);
     m_pages->addWidget(m_backups);
 
-    m_info = new InfoPanel(split);
+    // The info panel scrolls when the window is short (e.g. while the Apply bar shows).
+    auto *infoScroll = new QScrollArea(split);
+    infoScroll->setWidgetResizable(true);
+    infoScroll->setFrameShape(QFrame::NoFrame);
+    infoScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_info = new InfoPanel(infoScroll);
+    infoScroll->setWidget(m_info);
+    infoScroll->setMinimumWidth(m_info->minimumWidth());
     split->addWidget(m_places);
     split->addWidget(m_pages);
-    split->addWidget(m_info);
+    split->addWidget(infoScroll);
     split->setStretchFactor(1, 1);
     split->setSizes({200, 760, 300});
     outer->addWidget(split, 1);
@@ -125,6 +158,8 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
             QDesktopServices::openUrl(QUrl::fromLocalFile(it->mountedAt));
         }
     });
+    connect(m_info, &InfoPanel::editRequested, this, &MainWindow::editSelected);
+    connect(m_info, &InfoPanel::removeRequested, this, &MainWindow::removeSelected);
     connect(m_source, &DataSource::changed, this, &MainWindow::reload);
 
     setupActions();
@@ -134,15 +169,65 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
 
 void MainWindow::setupActions()
 {
-    KStandardAction::quit(qApp, &QApplication::closeAllWindows, actionCollection());
-    KStandardAction::redisplay(this, &MainWindow::reload, actionCollection());
-    KStandardAction::find(this, [this] { m_search->setFocus(); m_search->selectAll(); }, actionCollection());
+    KActionCollection *ac = actionCollection();
+    KStandardAction::quit(this, &QWidget::close, ac);
+    KStandardAction::redisplay(this, &MainWindow::reload, ac);
+    KStandardAction::find(this, [this] { m_search->setFocus(); m_search->selectAll(); }, ac);
+
+    m_newAction = ac->addAction(QStringLiteral("entry_new"), this, &MainWindow::newEntry);
+    m_newAction->setText(i18n("New fstab Entry…"));
+    m_newAction->setIcon(QIcon::fromTheme(QStringLiteral("list-add")));
+    ac->setDefaultShortcut(m_newAction, QKeySequence::New);
+
+    m_editAction = ac->addAction(QStringLiteral("entry_edit"), this, &MainWindow::editSelected);
+    m_editAction->setText(i18n("Edit…"));
+    m_editAction->setIcon(QIcon::fromTheme(QStringLiteral("document-edit")));
+    ac->setDefaultShortcut(m_editAction, Qt::Key_F2);
+
+    m_removeAction = ac->addAction(QStringLiteral("entry_remove"), this, &MainWindow::removeSelected);
+    m_removeAction->setText(i18n("Remove from fstab"));
+    m_removeAction->setIcon(QIcon::fromTheme(QStringLiteral("list-remove")));
+    ac->setDefaultShortcut(m_removeAction, QKeySequence::Delete);
+
+    m_applyAction = ac->addAction(QStringLiteral("changes_apply"), this, &MainWindow::applyChanges);
+    m_applyAction->setText(i18n("Apply"));
+    m_applyAction->setIcon(QIcon::fromTheme(QStringLiteral("dialog-ok-apply")));
+    ac->setDefaultShortcut(m_applyAction, QKeySequence::Save);
+
+    m_discardAction = ac->addAction(QStringLiteral("changes_discard"), this, &MainWindow::discardChanges);
+    m_discardAction->setText(i18n("Discard"));
+    m_discardAction->setIcon(QIcon::fromTheme(QStringLiteral("edit-delete-remove")));
+
+    m_previewAction = ac->addAction(QStringLiteral("changes_preview"), this, &MainWindow::previewChanges);
+    m_previewAction->setText(i18n("Preview…"));
+    m_previewAction->setIcon(QIcon::fromTheme(QStringLiteral("document-preview")));
+
+    m_systemAction = new KToggleAction(QIcon::fromTheme(QStringLiteral("object-unlocked")), i18n("Allow Editing System Entries"), this);
+    ac->addAction(QStringLiteral("allow_system_editing"), m_systemAction);
+    connect(m_systemAction, &QAction::toggled, this, &MainWindow::setSystemEditing);
+
+    m_applyBar->addAction(m_discardAction);
+    m_applyBar->addAction(m_previewAction);
+    m_applyBar->addAction(m_applyAction);
+    auto *lockAgain = new QAction(QIcon::fromTheme(QStringLiteral("object-locked")), i18n("Lock Again"), this);
+    connect(lockAgain, &QAction::triggered, this, [this] { m_systemAction->setChecked(false); });
+    m_systemBanner->addAction(lockAgain);
+}
+
+QByteArray MainWindow::currentContent() const
+{
+    return m_pending.value_or(m_snapshot.fstab);
 }
 
 void MainWindow::reload()
 {
     m_snapshot = m_source->load();
-    const fstab::File file = fstab::File::parse(m_snapshot.fstab);
+    rebuild();
+}
+
+void MainWindow::rebuild()
+{
+    const fstab::File file = fstab::File::parse(currentContent());
     m_model->setItems(inventory::build(file, m_snapshot.volumes, m_snapshot.mounts));
 
     const bool fullAccess = m_snapshot.me.fullAccess();
@@ -168,33 +253,6 @@ void MainWindow::reload()
         (it->kind == inventory::Kind::Network ? network : drives) += 1;
     }
     m_places->setCounts(all, drives, network, system, static_cast<int>(m_snapshot.backups.size()));
-
-    // Banner: problems first, otherwise what this version can do.
-    QStringList problems;
-    if (!m_snapshot.fstabError.isEmpty()) {
-        problems.append(i18n("Could not read /etc/fstab: %1", m_snapshot.fstabError));
-    }
-    if (!m_snapshot.drivesError.isEmpty()) {
-        problems.append(m_snapshot.drivesError);
-    }
-    int broken = 0;
-    for (const auto &l : file.lines()) {
-        broken += l.kind == fstab::LineKind::Invalid ? 1 : 0;
-    }
-    if (broken > 0) {
-        problems.append(i18np("/etc/fstab has %1 line that mount can't read.", "/etc/fstab has %1 lines that mount can't read.", broken));
-    }
-    if (!problems.isEmpty()) {
-        m_banner->setMessageType(KMessageWidget::Warning);
-        m_banner->setText(problems.join(QLatin1Char('\n')));
-    } else {
-        m_banner->setMessageType(KMessageWidget::Information);
-        m_banner->setText(fullAccess ? i18n("Read-only preview. System entries (shown with a lock) can only be changed by driveadmins and "
-                                            "administrators. Editing comes in the next version.")
-                                     : i18n("Read-only preview. Editing comes in the next version."));
-    }
-    m_banner->show();
-
     m_statusLeft->setText(i18np("%1 item, %2 mounted", "%1 items, %2 mounted", all, mounted));
     const QStringList groups = [&] {
         QStringList g;
@@ -216,15 +274,81 @@ void MainWindow::reload()
     if (again.isValid()) {
         m_tiles->setCurrentIndex(again);
     }
+    updateBanners();
     updateHeader();
     updateSelection();
+}
+
+void MainWindow::updateBanners()
+{
+    const fstab::File file = fstab::File::parse(currentContent());
+    QStringList problems;
+    if (!m_snapshot.fstabError.isEmpty()) {
+        problems.append(i18n("Could not read /etc/fstab: %1", m_snapshot.fstabError));
+    }
+    if (!m_snapshot.drivesError.isEmpty()) {
+        problems.append(m_snapshot.drivesError);
+    }
+    int broken = 0;
+    for (const auto &l : file.lines()) {
+        broken += l.kind == fstab::LineKind::Invalid ? 1 : 0;
+    }
+    if (broken > 0) {
+        problems.append(i18np("/etc/fstab has %1 line that mount can't read.", "/etc/fstab has %1 lines that mount can't read.", broken));
+    }
+    m_banner->setMessageType(KMessageWidget::Warning);
+    m_banner->setText(problems.join(QLatin1Char('\n')));
+    m_banner->setVisible(!problems.isEmpty());
+
+    if (m_pending) {
+        const int n = linediff::changeCount(linediff::diff(m_baseline, *m_pending));
+        if (m_snapshot.fstab != m_baseline) {
+            m_applyBar->setMessageType(KMessageWidget::Warning);
+            m_applyBar->setText(i18n("/etc/fstab was changed by another program while you were editing. Discard your changes to see the new "
+                                     "version, then make them again."));
+        } else {
+            m_applyBar->setMessageType(KMessageWidget::Information);
+            m_applyBar->setText(i18np("%1 changed line in /etc/fstab is not saved yet.", "%1 changed lines in /etc/fstab are not saved yet.", n));
+        }
+        m_applyBar->show();
+    } else {
+        m_applyBar->hide();
+    }
+    m_systemBanner->setVisible(m_systemUnlocked);
+    updateActions();
+}
+
+void MainWindow::updateActions()
+{
+    const bool fullAccess = m_snapshot.me.fullAccess();
+    m_systemAction->setVisible(fullAccess);
+    const auto *it = selectedItem();
+    QString why;
+    const bool editable = it && canEdit(*it, &why);
+    m_editAction->setEnabled(editable && !m_applying);
+    m_editAction->setText(it && !it->entry ? i18n("Add to fstab…") : i18n("Edit…"));
+    m_removeAction->setEnabled(editable && it->entry && !m_applying);
+    m_newAction->setEnabled(!m_applying && m_snapshot.fstabError.isEmpty());
+    const bool pending = m_pending.has_value();
+    m_applyAction->setEnabled(pending && !m_applying && m_snapshot.fstab == m_baseline);
+    m_discardAction->setEnabled(pending && !m_applying);
+    m_previewAction->setEnabled(pending);
 }
 
 void MainWindow::updateHeader()
 {
     const QString place = PlacesPanel::name(m_places->current());
     m_breadcrumb->setText(QStringLiteral("Anchorage  ›  <b>%1</b>").arg(place.toHtmlEscaped()));
-    setCaption(place);
+    setCaption(place, m_pending.has_value());
+}
+
+const inventory::Item *MainWindow::selectedItem() const
+{
+    if (m_places->current() == PlacesPanel::Place::Backups) {
+        return nullptr;
+    }
+    const QModelIndexList sel = m_tiles->selectionModel()->selectedIndexes();
+    return sel.isEmpty() ? nullptr : m_model->item(m_filter->mapToSource(sel.first()));
 }
 
 void MainWindow::updateSelection()
@@ -234,13 +358,17 @@ void MainWindow::updateSelection()
         m_info->showMessage(PlacesPanel::name(PlacesPanel::Place::Backups),
                             n == 0 ? i18n("No backups yet") : i18np("%1 backup of /etc/fstab", "%1 backups of /etc/fstab", n),
                             QStringLiteral("document-revert"));
+        updateActions();
         return;
     }
-    const QModelIndexList sel = m_tiles->selectionModel()->selectedIndexes();
-    const auto *it = sel.isEmpty() ? nullptr : m_model->item(m_filter->mapToSource(sel.first()));
+    const auto *it = selectedItem();
     if (it) {
         m_selectedId = it->id;
         m_info->showItem(*it);
+        QString why;
+        const bool editable = canEdit(*it, &why);
+        m_info->setActions(editable ? (it->entry ? i18n("Edit…") : i18n("Add to fstab…")) : QString(), editable && it->entry, why);
+        updateActions();
         return;
     }
     m_selectedId.clear();
@@ -250,6 +378,301 @@ void MainWindow::updateSelection()
         mounted += x && x->mounted ? 1 : 0;
     }
     m_info->showSummary(m_filter->rowCount(), mounted, PlacesPanel::name(m_places->current()));
+    updateActions();
+}
+
+bool MainWindow::canEdit(const inventory::Item &item, QString *why) const
+{
+    if (!m_snapshot.fstabError.isEmpty()) {
+        *why = i18n("/etc/fstab could not be read, so it can't be changed.");
+        return false;
+    }
+    if (item.kind == inventory::Kind::Swap && !item.entry && !item.volume) {
+        return false;
+    }
+    if (item.system) {
+        if (!m_snapshot.me.fullAccess()) {
+            return false;
+        }
+        if (!m_systemUnlocked) {
+            *why = i18n("Needed to start the computer. Switch on \"Allow Editing System Entries\" to change it.");
+            return false;
+        }
+    }
+    if (!m_snapshot.me.fullAccess()) {
+        *why = i18n("Saving changes to /etc/fstab asks for an administrator's password.");
+    }
+    return true;
+}
+
+EditorContext MainWindow::editorContext(int editedLine) const
+{
+    EditorContext ctx;
+    ctx.volumes = m_snapshot.volumes;
+    ctx.me = m_snapshot.me;
+    ctx.systemUnlocked = m_systemUnlocked;
+    ctx.users = m_snapshot.accounts;
+    const fstab::File file = fstab::File::parse(currentContent());
+    for (const int i : file.entryLines()) {
+        const auto &entry = file.lines().at(static_cast<std::size_t>(i)).entry;
+        if (!entry) {
+            continue;
+        }
+        const auto &e = *entry;
+        if (e.mountPoint == QLatin1String("/")) {
+            ctx.rootSpecs.append(e.spec);
+        }
+        if (i != editedLine && e.type != QLatin1String("swap")) {
+            ctx.otherMountPoints.append(e.mountPoint);
+        }
+    }
+    return ctx;
+}
+
+void MainWindow::setPending(const QByteArray &content)
+{
+    if (!m_pending) {
+        m_baseline = m_snapshot.fstab;
+    }
+    if (content == m_baseline) {
+        m_pending.reset();
+    } else {
+        m_pending = content;
+    }
+    rebuild();
+}
+
+void MainWindow::newEntry()
+{
+    if (m_applying) {
+        return;
+    }
+    auto *editor = new EntryEditor(fstab::Entry{}, true, editorContext(-1), nullptr, this);
+    editor->setAttribute(Qt::WA_DeleteOnClose);
+    connect(editor, &QDialog::accepted, this, [this, editor] {
+        fstab::File file = fstab::File::parse(currentContent());
+        const int line = file.append(editor->entry());
+        if (line >= 0) {
+            m_selectedId = QStringLiteral("fstab:%1").arg(line);
+            setPending(file.serialize());
+        }
+    });
+    Q_EMIT editorOpened(editor);
+    editor->open();
+}
+
+void MainWindow::editSelected()
+{
+    if (const auto *it = selectedItem()) {
+        const inventory::Item item = *it; // the model is rebuilt while editing
+        editItem(item);
+    }
+}
+
+void MainWindow::editItem(const inventory::Item &item)
+{
+    QString why;
+    if (m_applying || !canEdit(item, &why)) {
+        if (!why.isEmpty() && item.system) {
+            KMessageBox::information(this, why);
+        }
+        return;
+    }
+    const fstab::File file = fstab::File::parse(currentContent());
+    EntryEditor *editor = nullptr;
+    if (item.entry) {
+        const auto &line = file.lines().at(static_cast<std::size_t>(item.fstabLine));
+        editor = new EntryEditor(*item.entry, false, editorContext(item.fstabLine), &line, this);
+    } else {
+        fstab::Entry e;
+        if (item.kind == inventory::Kind::Network) {
+            // A share mounted some other way: start from what is mounted now.
+            e.spec = item.source;
+            e.type = item.fsType;
+            e.mountPoint = item.mountPoint;
+            e.options = access::apply({}, access::defaultsFor(e.type), e.type);
+        }
+        editor = new EntryEditor(e, true, editorContext(-1), nullptr, this);
+        if (item.volume) {
+            editor->useVolume(*item.volume);
+        }
+    }
+    editor->setAttribute(Qt::WA_DeleteOnClose);
+    const int lineIndex = item.fstabLine;
+    const bool isNew = !item.entry;
+    connect(editor, &QDialog::accepted, this, [this, editor, lineIndex, isNew] {
+        fstab::File f = fstab::File::parse(currentContent());
+        if (isNew) {
+            const int line = f.append(editor->entry());
+            if (line < 0) {
+                return;
+            }
+            m_selectedId = QStringLiteral("fstab:%1").arg(line);
+        } else if (!f.replace(lineIndex, editor->entry())) {
+            return;
+        }
+        setPending(f.serialize());
+    });
+    Q_EMIT editorOpened(editor);
+    editor->open();
+}
+
+void MainWindow::removeSelected()
+{
+    const auto *it = selectedItem();
+    QString why;
+    if (!it || !it->entry || m_applying || !canEdit(*it, &why)) {
+        return;
+    }
+    const QString mountPoint = it->mountPoint;
+    fstab::File file = fstab::File::parse(currentContent());
+    if (file.remove(it->fstabLine)) {
+        m_selectedId.clear();
+        setPending(file.serialize()); // invalidates `it`
+        statusBar()->showMessage(i18n("Removed %1 from the pending changes. Click Apply to save, or Discard to undo.", mountPoint), 8000);
+    }
+}
+
+void MainWindow::discardChanges()
+{
+    m_pending.reset();
+    rebuild();
+}
+
+void MainWindow::previewChanges()
+{
+    if (!m_pending) {
+        return;
+    }
+    auto *dlg = new PreviewDialog(m_baseline, *m_pending, false, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->open();
+}
+
+void MainWindow::setSystemEditing(bool on)
+{
+    if (on && !m_snapshot.me.fullAccess()) {
+        on = false;
+    }
+    m_systemUnlocked = on;
+    if (m_systemAction->isChecked() != on) {
+        m_systemAction->setChecked(on);
+    }
+    updateBanners();
+    updateSelection();
+}
+
+void MainWindow::applyChanges()
+{
+    if (!m_pending || m_applying) {
+        return;
+    }
+    if (m_snapshot.fstab != m_baseline) {
+        KMessageBox::error(this, i18n("/etc/fstab was changed by another program while you were editing. Discard your changes and make them again."));
+        return;
+    }
+    const QByteArray proposed = *m_pending;
+
+    // The helper checks everything again; checking here first gives clear messages and
+    // asks for the typed confirmation before the password prompt.
+    bool confirm = false;
+    policy::Plan plan = policy::planFstabWrite(m_baseline, proposed, m_snapshot.me, false);
+    QStringList blocked;
+    for (const QString &mp : std::as_const(plan.newMountPoints)) {
+        if (policy::classifyMountPoint(mp).zone == policy::Zone::Blocked) {
+            blocked.append(mp);
+        }
+    }
+    if (!blocked.isEmpty() && m_snapshot.me.sudo) {
+        ProtectedConfirmDialog dlg(blocked, this);
+        if (dlg.exec() != QDialog::Accepted) {
+            return;
+        }
+        confirm = true;
+        plan = policy::planFstabWrite(m_baseline, proposed, m_snapshot.me, true);
+    }
+    if (!plan.ok()) {
+        KMessageBox::detailedError(this, i18n("These changes can't be saved:"), plan.errors.join(QLatin1Char('\n')));
+        return;
+    }
+
+    // findmnt --verify, for the entries that change. Missing folders are fine (the
+    // helper creates them), and so are missing devices for entries that may be missing.
+    QStringList problems;
+    QHash<QString, fstab::Entry> added;
+    for (const auto &e : std::as_const(plan.added)) {
+        added.insert(e.mountPoint, e);
+    }
+    for (const auto &f : m_source->verify(proposed)) {
+        if (!f.error || !added.contains(f.target)) {
+            continue;
+        }
+        const auto &e = added.value(f.target);
+        const bool mayBeMissing = e.options.contains(QStringLiteral("nofail")) || e.options.contains(QStringLiteral("noauto"));
+        if (f.message.contains(QLatin1String("target")) && plan.newMountPoints.contains(f.target)) {
+            continue;
+        }
+        if (f.message.contains(QLatin1String("source")) && mayBeMissing) {
+            continue;
+        }
+        problems.append(QStringLiteral("%1: %2").arg(f.target, f.message));
+    }
+    if (!problems.isEmpty()
+        && KMessageBox::warningContinueCancelList(this, i18n("findmnt found problems that may stop the computer from starting:"), problems,
+                                                  i18n("Check Before Saving"), KGuiItem(i18n("Save Anyway")))
+            != KMessageBox::Continue) {
+        return;
+    }
+
+    m_applying = true;
+    updateActions();
+    statusBar()->showMessage(i18n("Saving /etc/fstab…"));
+    requests::WriteFstab request{service::fingerprint(m_baseline), proposed, confirm, true};
+    m_source->writeFstab(request, this, [this, proposed](const client::Reply &reply) {
+        m_applying = false;
+        switch (reply.status) {
+        case client::Reply::Status::Ok: {
+            if (m_pending == proposed) {
+                m_pending.reset();
+            }
+            const QString backup = reply.data.value(QStringLiteral("backup")).toString();
+            statusBar()->showMessage(backup.isEmpty() ? i18n("Saved /etc/fstab.") : i18n("Saved /etc/fstab. The previous version is in Backups (%1).", backup), 15000);
+            reload();
+            break;
+        }
+        case client::Reply::Status::Cancelled:
+            statusBar()->showMessage(i18n("Not saved: the password prompt was closed."), 8000);
+            updateActions();
+            break;
+        case client::Reply::Status::Denied:
+            statusBar()->clearMessage();
+            KMessageBox::error(this, i18n("Not saved: you are not allowed to change /etc/fstab, or the password was wrong."));
+            updateActions();
+            break;
+        case client::Reply::Status::Failed:
+            statusBar()->clearMessage();
+            KMessageBox::detailedError(this, i18n("/etc/fstab was not changed."), reply.message);
+            updateActions();
+            break;
+        }
+        Q_EMIT applyFinished(reply.ok());
+    });
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    if (m_pending && !m_applying) {
+        const auto answer = KMessageBox::warningTwoActionsCancel(this, i18n("The changes to /etc/fstab are not saved yet."), i18n("Unsaved Changes"),
+                                                                 KGuiItem(i18n("Discard Changes"), QStringLiteral("edit-delete-remove")),
+                                                                 KGuiItem(i18n("Keep Editing"), QStringLiteral("document-edit")),
+                                                                 KStandardGuiItem::cancel());
+        if (answer != KMessageBox::PrimaryAction) {
+            event->ignore();
+            return;
+        }
+        m_pending.reset();
+    }
+    KXmlGuiWindow::closeEvent(event);
 }
 
 void MainWindow::showContextMenu(const QPoint &pos)
@@ -277,7 +700,8 @@ void MainWindow::showContextMenu(const QPoint &pos)
         connect(copyUuid, &QAction::triggered, this, [item] { QApplication::clipboard()->setText(item.volume->uuid); });
     }
     menu.addSeparator();
-    QAction *edit = menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")), i18n("Edit… (next version)"));
-    edit->setEnabled(false);
+    updateActions();
+    menu.addAction(m_editAction);
+    menu.addAction(m_removeAction);
     menu.exec(m_tiles->viewport()->mapToGlobal(pos));
 }

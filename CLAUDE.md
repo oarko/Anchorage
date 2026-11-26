@@ -11,8 +11,9 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
 ## Project status
 
 - Design agreed: layout C (Dolphin-like, QtWidgets), see SPEC §15.
-- Done: fstab reader/writer, root helper + permission rules, drive detection, read-only main
-  window. Next: editing (entry editor + Apply), then network shares (SPEC §11).
+- Done: fstab reader/writer, root helper + permission rules, drive detection, main window,
+  entry editor (Basic/Access/Advanced, option catalogue) with pending changes and Apply.
+  Next: test mount after saving + restore backup in the GUI (SPEC §9), then network shares (SPEC §11).
 - SMB share *creation* is a planned phase 2 feature (SPEC §16); keep v1 scope to mounting.
 - Ask the user before starting implementation.
 
@@ -88,7 +89,8 @@ These come from the user's requirements and apply to every change:
   first, and only findmnt's messages are used (see `tests/fstabtest.cpp`).
 - Fuzzing: `cmake --preset fuzz && cmake --build --preset fuzz`, then
   `build/fuzz/bin/fstab_fuzzer -max_total_time=300 -max_len=8192 build/fuzz/corpus tests/data` and
-  `build/fuzz/bin/policy_fuzzer -max_total_time=300 -max_len=4096 build/fuzz/corpus-policy fuzz/seeds/policy`.
+  `build/fuzz/bin/policy_fuzzer -max_total_time=300 -max_len=4096 build/fuzz/corpus-policy fuzz/seeds/policy` and
+  `build/fuzz/bin/options_fuzzer -max_total_time=300 -max_len=2048 build/fuzz/corpus-options fuzz/seeds/options`.
   CI runs each for 1 minute on every push. Keep any crash input that turned out to be a
   harness mistake as a regression seed in `fuzz/seeds/`.
 - **Root-only code paths** (owners of written files and new folders): run
@@ -138,10 +140,32 @@ These come from the user's requirements and apply to every change:
 - To change the base image (e.g. add packages): reset, start, make the change, stop, then
   `qemu-img commit` the overlay into the base (make the base writable first) and copy the
   overlay's VARS back to the base VARS.
-- Real mount tests run in a throwaway privileged Docker container with
-  `mount -T <proxy fstab> -a` (tmpfs, bind, loop images of ext4/btrfs/vfat/exfat, plus
-  Samba and NFS server containers). Unprivileged user namespaces don't work here: Ubuntu
-  sets `kernel.apparmor_restrict_unprivileged_userns=1`.
+- **Real mounts**: `tests/docker/run-mount-tests.sh` (~3 min with the build) runs
+  `tests/mounttest.cpp` in a throwaway **privileged** container (no network, own mount
+  namespace). It formats loop images of every testable type in the catalogue (14: ext2-4,
+  btrfs, xfs, f2fs, vfat, exfat, ntfs3, ntfs-3g, udf, tmpfs, bind), mounts every Access tab
+  combination with `mount -T <proxy fstab>` (checks owner, mode, user-mount flags and the
+  units systemd-fstab-generator makes), and sweeps every catalogue option one by one, so a
+  typo or an option the kernel dropped fails the test. Options marked `"t": {"skip": ...}`
+  are not swept; `"skip": "network"` ones are swept by `tests/vm/network.sh` (~6 min), which
+  installs Samba (guest share) and an NFS server **in the VM** (never on the host) and runs
+  the same test for cifs, smb3, nfs and nfs4. It found that mount.cifs refuses ten general
+  options (`atime`, `strictatime`, `nouser`, `nosymfollow`, `silent`, ...): the catalogue's
+  `"not"` field excludes them for SMB.
+  - Privileged containers share the host's loop devices: the script detaches only the
+    ones backed by its own images (`losetup -j`), never `losetup -D` (snap uses loops).
+  - The container's `/dev` is a copy from its start, so the script `mknod`s loop nodes.
+  - Kernel 7.0 findings it made: ext4 no longer accepts `noacl`; btrfs refuses bare
+    `space_cache` (v1 is gone); `journal_async_commit` needs `data=writeback`; ntfs3 shows
+    the top folder as 0777 whatever the umask (editor warns, test records it).
+  Unprivileged user namespaces don't work here: Ubuntu sets
+  `kernel.apparmor_restrict_unprivileged_userns=1`.
+- **Editor end-to-end**: `tests/vm/editor.sh` (~12 min) builds entries with the editor's
+  code (`anchorage-e2e-client edit`, the GUI's `anchorage::client` KAuth path), saves them
+  with real password prompts, then checks user mounts (alice/nora via `sudo -u`), owners,
+  `users` vs `user`, and after a **reboot**: boot mounts, automount, a missing `nofail`
+  drive and an unreachable NFS server not blocking start-up, remove + restore.
+  Disk images are attached at boot by a oneshot unit before `local-fs-pre.target`.
 
 - Unit tests (QtTest) for the fstab parser/writer, especially round-trip preservation
   of comments, blank lines, and spacing.

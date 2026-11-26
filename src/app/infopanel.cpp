@@ -73,7 +73,24 @@ InfoPanel::InfoPanel(QWidget *parent)
         }
     });
 
-    m_note = new QLabel(i18n("This is a read-only preview. Editing, mounting and network shares come in the next versions."), this);
+    m_adminBox = new QWidget(this);
+    auto *adminLayout = new QVBoxLayout(m_adminBox);
+    adminLayout->setContentsMargins(0, 6, 0, 0);
+    auto *adminTitle = new QLabel(i18n("Administrator"), m_adminBox);
+    adminTitle->setFont(bold);
+    m_edit = new QPushButton(QIcon::fromTheme(QStringLiteral("document-edit")), QString(), m_adminBox);
+    m_edit->setObjectName(QStringLiteral("info.edit"));
+    m_remove = new QPushButton(QIcon::fromTheme(QStringLiteral("list-remove")), i18n("Remove from fstab"), m_adminBox);
+    m_remove->setObjectName(QStringLiteral("info.remove"));
+    adminLayout->addWidget(adminTitle);
+    adminLayout->addWidget(m_edit);
+    adminLayout->addWidget(m_remove);
+    connect(m_edit, &QPushButton::clicked, this, &InfoPanel::editRequested);
+    connect(m_remove, &QPushButton::clicked, this, &InfoPanel::removeRequested);
+    m_adminBox->hide();
+
+    m_note = new QLabel(this);
+    m_note->setObjectName(QStringLiteral("info.note"));
     m_note->setWordWrap(true);
     m_note->setForegroundRole(QPalette::PlaceholderText);
 
@@ -86,11 +103,21 @@ InfoPanel::InfoPanel(QWidget *parent)
     layout->addSpacing(6);
     layout->addWidget(m_open);
     layout->addWidget(m_copy);
+    layout->addWidget(m_adminBox);
     layout->addStretch(1);
     layout->addWidget(m_note);
 
     setMinimumWidth(280);
     showSummary(0, 0, QString());
+}
+
+void InfoPanel::setActions(const QString &editText, bool canRemove, const QString &hint)
+{
+    m_adminBox->setVisible(!editText.isEmpty() || canRemove);
+    m_edit->setVisible(!editText.isEmpty());
+    m_edit->setText(editText);
+    m_remove->setVisible(canRemove);
+    m_note->setText(hint);
 }
 
 void InfoPanel::clearRows()
@@ -124,6 +151,8 @@ void InfoPanel::showSummary(int total, int mounted, const QString &viewName)
     m_fstabBox->hide();
     m_open->hide();
     m_copy->hide();
+    m_adminBox->hide();
+    m_note->clear();
 }
 
 void InfoPanel::showMessage(const QString &title, const QString &text, const QString &iconName)
@@ -136,6 +165,8 @@ void InfoPanel::showMessage(const QString &title, const QString &text, const QSt
     m_fstabBox->hide();
     m_open->hide();
     m_copy->hide();
+    m_adminBox->hide();
+    m_note->clear();
 }
 
 void InfoPanel::showItem(const std::optional<Item> &item)

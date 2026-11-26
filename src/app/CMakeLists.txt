@@ -5,6 +5,10 @@ add_library(anchorage_ui STATIC
     backupspage.h
     datasource.cpp
     datasource.h
+    entryeditor.cpp
+    entryeditor.h
+    applydialogs.cpp
+    applydialogs.h
     infopanel.cpp
     infopanel.h
     inventorymodel.cpp
@@ -20,6 +24,7 @@ target_include_directories(anchorage_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(anchorage_ui
     PUBLIC
         anchorage_core
+        anchorage_client
         Qt6::Widgets
         KF6::CoreAddons
         KF6::I18n

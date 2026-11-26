@@ -9,6 +9,7 @@ RUN apt-get update \
       qt6-base-dev qt6-tools-dev \
       libkf6coreaddons-dev libkf6i18n-dev libkf6xmlgui-dev libkf6widgetsaddons-dev libkf6auth-dev libkf6itemviews-dev libkf6colorscheme-dev libkf6solid-dev \
       systemd util-linux \
+      e2fsprogs btrfs-progs xfsprogs dosfstools exfatprogs ntfs-3g f2fs-tools udftools \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build

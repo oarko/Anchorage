@@ -2,7 +2,7 @@
 
 Status: **Agreed.** Items marked **[OPEN]** need the user's decision.
 
-Last updated: 2026-11-22
+Last updated: 2026-11-25
 
 ---
 
@@ -166,13 +166,47 @@ General rules for every zone:
     valid values, including rarely used SMB/NFS options.
 - Drives are identified by `UUID=` by default (with an option for `LABEL=`/`PARTUUID=`/path).
 
+Implemented (2026-11-25) in `src/app/entryeditor.*`, `src/core/access.*`, `src/core/options.*`:
+- **Option catalogue**: `src/core/data/filesystems.json` (21 types) and `options.json` (~390
+  options: general, systemd, desktop and per-file-system, including every common
+  `mount.cifs(8)` and `nfs(5)` option). Each has a plain-language description, default, value
+  type and valid values, warnings for risky ones (`password=`, `nobarrier`, `noperm`, ...).
+  Loaded and validated at start (duplicates, unknown types, bad examples are refused).
+- **Access tab mapping** (only the options a choice owns are rewritten; everything else
+  keeps its place, including values Anchorage can't represent such as `uid=name`):
+
+  | Choice | Options |
+  |---|---|
+  | While the computer starts / only when asked / when the folder is opened | – / `noauto` / `noauto,x-systemd.automount` |
+  | Administrators only / any user / any user, anyone unmounts | – / `user` / `users` |
+  | Owner (FAT, exFAT, NTFS, SMB only) | `uid=`, `gid=` (the person's primary group) |
+  | Permissions: only the owner / others read / everyone | `umask=077/022/000` (SMB: `file_mode`/`dir_mode` 0600+0700, 0644+0755, 0666+0777) |
+  | Start even if missing / needs the network | `nofail` / `_netdev` |
+
+- **New entries** default to `nofail`; network types also to `_netdev` and "when the
+  folder is opened". NTFS drives are suggested as `ntfs3`. The check order (pass) follows
+  the type (ext* 2, others 0).
+- **Checks while editing** (OK is disabled on errors): field syntax and escaping, option
+  values, contradictions (`ro`+`rw`), unknown options (warning), mount point used twice,
+  mount-point zone for the caller (§7), non-empty folder, system entry without the unlock,
+  missing `nofail` for boot mounts (warning), bind mounts without `bind`.
+- **ntfs3 finding** (kernel 7.0, `tests/mounttest.cpp`): the driver shows the drive's top
+  folder as `0777` whatever the umask, so every user can create files there (subfolders
+  follow the umask; ntfs-3g gets it right). The editor warns when "only the owner" or
+  "others read" is chosen with `ntfs3`.
+- Pending changes: the main window keeps an edited copy of the file. The Apply bar shows
+  Discard / Preview… / Apply; Apply checks the plan locally (`policy::planFstabWrite`),
+  asks for typed confirmation for protected locations (sudo), runs `findmnt --verify`, and
+  sends the file with the SHA-256 of the version it started from. If the file changes on
+  disk meanwhile, Apply is disabled until the changes are discarded.
+
 ## 9. Save safety
 
 | Feature | Default | Notes |
 |---|---|---|
 | Timestamped backup | **On** | Keep the last N (setting); "Restore backup" menu |
-| Validate before writing | **On** | Own checks + `findmnt --verify` |
-| Test mount + undo offer | **On** | After saving: `daemon-reload`, mount the new/changed entries, offer to restore on failure |
+| Validate before writing | **On** | Own checks + `findmnt --verify` (implemented: run in the GUI before the password prompt; missing folders the helper will create, and missing devices of `nofail`/`noauto` entries, are not reported) |
+| Test mount + undo offer | **On** | After saving: `daemon-reload`, mount the new/changed entries, offer to restore on failure. **Not yet implemented** (needs the helper's mount action) |
 | Preview changes | **Off** | "Preview…" button always available; admin setting forces it on for everyone |
 
 ## 10. Drives

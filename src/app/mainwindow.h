@@ -2,8 +2,11 @@
 #pragma once
 
 #include "datasource.h"
+#include "inventory.h"
 
 #include <KXmlGuiWindow>
+
+#include <optional>
 
 class BackupsPage;
 class InfoPanel;
@@ -11,13 +14,19 @@ class InventoryFilter;
 class InventoryModel;
 class KCategorizedView;
 class KMessageWidget;
+class KToggleAction;
 class PlacesPanel;
+class QAction;
 class QLabel;
 class QLineEdit;
 class QStackedWidget;
+struct EditorContext;
 
 // Main window, layout C (Dolphin-like): Places | tiles | info panel. See docs/SPEC.md §15.
-// This version is read-only: it shows /etc/fstab, drives and mounts, and changes nothing.
+//
+// Editing works on a pending copy of /etc/fstab. Each change from the entry editor is
+// applied to that copy; the Apply bar (Discard / Preview… / Apply) sends the whole file
+// to the helper, which checks it again and writes it.
 class MainWindow : public KXmlGuiWindow
 {
     Q_OBJECT
@@ -28,14 +37,48 @@ public:
 
     void reload();
 
+    bool hasPendingChanges() const { return m_pending.has_value(); }
+    QByteArray pendingContent() const { return m_pending.value_or(QByteArray()); }
+
+    // Actions, also used by tests.
+    void newEntry();
+    void editSelected();
+    void removeSelected();
+    void applyChanges();
+    void discardChanges();
+    void previewChanges();
+    void setSystemEditing(bool on);
+
+Q_SIGNALS:
+    // An editor dialog was created (tests use this to drive it).
+    void editorOpened(QDialog *editor);
+    void applyFinished(bool ok);
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
+
 private:
     void setupActions();
+    void rebuild();
     void updateSelection();
     void updateHeader();
+    void updateActions();
+    void updateBanners();
     void showContextMenu(const QPoint &pos);
+    const anchorage::inventory::Item *selectedItem() const;
+    QByteArray currentContent() const;
+    void setPending(const QByteArray &content);
+    EditorContext editorContext(int editedLine) const;
+    void editItem(const anchorage::inventory::Item &item);
+    bool canEdit(const anchorage::inventory::Item &item, QString *why = nullptr) const;
 
     DataSource *m_source;
     Snapshot m_snapshot;
+    std::optional<QByteArray> m_pending; // proposed /etc/fstab
+    QByteArray m_baseline; // /etc/fstab when editing started
+    bool m_systemUnlocked = false;
+    bool m_applying = false;
+
     InventoryModel *m_model;
     InventoryFilter *m_filter;
     PlacesPanel *m_places;
@@ -44,9 +87,19 @@ private:
     BackupsPage *m_backups;
     QStackedWidget *m_pages;
     KMessageWidget *m_banner;
+    KMessageWidget *m_systemBanner;
+    KMessageWidget *m_applyBar;
     QLabel *m_breadcrumb;
     QLineEdit *m_search;
     QLabel *m_statusLeft;
     QLabel *m_statusRight;
     QString m_selectedId;
+
+    QAction *m_newAction = nullptr;
+    QAction *m_editAction = nullptr;
+    QAction *m_removeAction = nullptr;
+    QAction *m_applyAction = nullptr;
+    QAction *m_discardAction = nullptr;
+    QAction *m_previewAction = nullptr;
+    KToggleAction *m_systemAction = nullptr;
 };
