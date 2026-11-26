@@ -25,3 +25,9 @@ Name=Remove a shared network mount
 Description=Removing a shared network mount requires authentication
 Policy=auth_admin
 Persistence=session
+
+[@APP_ID@.writesettings]
+Name=Change Anchorage's settings
+Description=Changing Anchorage's system-wide settings requires authentication
+Policy=auth_admin
+Persistence=session

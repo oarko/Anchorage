@@ -92,7 +92,11 @@ private Q_SLOTS:
         m_paths.backupDir = root + QStringLiteral("/etc/anchorage/backups");
         m_paths.credentialsDir = QStringLiteral("/etc/anchorage/credentials");
         m_paths.mountRoot = root + QStringLiteral("/fsroot");
-        m_paths.keepBackups = 3;
+        QVERIFY(QDir().mkpath(m_paths.configDir));
+        QFile config(m_paths.configDir + QStringLiteral("/config"));
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("keep-backups = 3\n");
+        config.close();
         QVERIFY(QDir().mkpath(m_paths.fstabDir));
         QVERIFY(QDir().mkpath(m_paths.mountRoot + QStringLiteral("/mnt")));
         QFile f(fstabPath());
@@ -221,6 +225,62 @@ private Q_SLOTS:
         QVERIFY(!readPlain(m_paths.backupDir + QLatin1Char('/') + list->first()).contains("/mnt/d4"));
     }
 
+    void settingsNeedFullAccessAndValidValues()
+    {
+        settings::Settings s;
+        s.keepBackups = 2;
+        s.ntfsDriver = QStringLiteral("ntfs");
+        QVERIFY(!writeSettings(m_paths, standard, s).ok());
+        QVERIFY(!writeSettings(m_paths, netmount, s).ok());
+        QCOMPARE(readSettings(m_paths).keepBackups, 3); // unchanged
+        QVERIFY(writeSettings(m_paths, driveadmin, s).ok());
+        QCOMPARE(readSettings(m_paths), s);
+        QVERIFY(writeSettings(m_paths, sudoer, settings::Settings{}).ok());
+        QCOMPARE(readSettings(m_paths), settings::Settings{});
+        for (int bad : {0, -1, 101}) {
+            settings::Settings b;
+            b.keepBackups = bad;
+            QVERIFY(!writeSettings(m_paths, sudoer, b).ok());
+        }
+        settings::Settings badDriver;
+        badDriver.ntfsDriver = QStringLiteral("ntfs3\nkeep-backups = 1");
+        QVERIFY(!writeSettings(m_paths, sudoer, badDriver).ok());
+        QCOMPARE(readSettings(m_paths), settings::Settings{});
+    }
+
+    void loweringTheNumberPrunesAtTheNextWrite()
+    {
+        QByteArray content = initial;
+        for (int i = 0; i < 3; ++i) {
+            content += "LABEL=e" + QByteArray::number(i) + "  /mnt/e" + QByteArray::number(i) + "  ext4  nofail  0 0\n";
+            QVERIFY(write(standard, content, false, false).ok());
+        }
+        QCOMPARE(listBackups(m_paths)->size(), 3);
+        settings::Settings s;
+        s.keepBackups = 1;
+        QVERIFY(writeSettings(m_paths, driveadmin, s).ok());
+        QCOMPARE(listBackups(m_paths)->size(), 3); // nothing deleted yet
+        QVERIFY(write(standard, initial, false, false).ok());
+        QCOMPARE(listBackups(m_paths)->size(), 1);
+    }
+
+    void settingsFileParsing()
+    {
+        using settings::parse;
+        QCOMPARE(parse("").keepBackups, settings::defaultKeepBackups);
+        QCOMPARE(parse("keep-backups=25\nntfs-driver=ntfs\n").keepBackups, 25);
+        QCOMPARE(parse("  keep-backups =  7   # comment\n").keepBackups, 7);
+        QCOMPARE(parse("keep-backups = 0\n").keepBackups, settings::defaultKeepBackups);
+        QCOMPARE(parse("keep-backups = 1000\n").keepBackups, settings::defaultKeepBackups);
+        QCOMPARE(parse("keep-backups = ten\n").keepBackups, settings::defaultKeepBackups);
+        QCOMPARE(parse("ntfs-driver = fuse\n").ntfsDriver, QStringLiteral("ntfs3"));
+        QCOMPARE(parse("ntfs-driver = ntfs\nunknown = 1\n").ntfsDriver, QStringLiteral("ntfs"));
+        settings::Settings s;
+        s.keepBackups = 42;
+        s.ntfsDriver = QStringLiteral("ntfs");
+        QCOMPARE(parse(settings::serialize(s)), s);
+    }
+
     void restoreBackup()
     {
         const Outcome first = write(standard, initial + "LABEL=a  /mnt/a  ext4  nofail  0 0\n", false, false);
@@ -291,6 +351,19 @@ private Q_SLOTS:
 
         const fstab::Entry e{QStringLiteral("//nas/G"), QStringLiteral("/mnt/g"), QStringLiteral("cifs"), {QStringLiteral("guest")}, 0, 0};
         QCOMPARE(*requests::decodeEntry(requests::encodeEntry(e)), e);
+        settings::Settings st;
+        st.keepBackups = 5;
+        QCOMPARE(*requests::decodeSettings(requests::encodeSettings(st)), st);
+        QVariantMap badSettings = requests::encodeSettings(st);
+        badSettings[QStringLiteral("keepBackups")] = QStringLiteral("5");
+        QVERIFY(!requests::decodeSettings(badSettings).ok());
+        badSettings = requests::encodeSettings(st);
+        badSettings[QStringLiteral("keepBackups")] = 0;
+        QVERIFY(!requests::decodeSettings(badSettings).ok());
+        badSettings = requests::encodeSettings(st);
+        badSettings.insert(QStringLiteral("path"), QStringLiteral("/etc/shadow"));
+        QVERIFY(!requests::decodeSettings(badSettings).ok());
+
         QVariantMap badEntry = requests::encodeEntry(e);
         badEntry[QStringLiteral("pass")] = QStringLiteral("0");
         QVERIFY(!requests::decodeEntry(badEntry).ok());
@@ -317,6 +390,14 @@ private Q_SLOTS:
         QCOMPARE(mp.uid, uid_t(0));
         QCOMPARE(mp.gid, gid_t(0));
         QCOMPARE(mp.mode, mode_t(0755));
+
+        const QString config = m_paths.configDir + QStringLiteral("/config");
+        QVERIFY(::chown(QFile::encodeName(config).constData(), homeOwner, homeOwner) == 0);
+        QVERIFY(writeSettings(m_paths, driveadmin, settings::Settings{}).ok());
+        const FileInfo c = statOf(config);
+        QCOMPARE(c.uid, uid_t(0));
+        QCOMPARE(c.gid, gid_t(0));
+        QCOMPARE(c.mode, mode_t(0644));
     }
 
     void rootGivesHomeMountPointsToTheHomeOwner()

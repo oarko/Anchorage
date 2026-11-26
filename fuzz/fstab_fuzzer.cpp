@@ -3,6 +3,7 @@
 // Build with the "fuzz" preset, then run e.g.:
 //   build/fuzz/bin/fstab_fuzzer -max_total_time=300 fuzz/corpus/fstab tests/data
 #include "fstab.h"
+#include "settings.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -21,6 +22,15 @@ namespace
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     const QByteArrayView input(reinterpret_cast<const char *>(data), static_cast<qsizetype>(size));
+
+    // 0. The settings file parser (same input): values always stay in range, and
+    //    whatever it reads survives a write and read back.
+    {
+        const anchorage::settings::Settings st = anchorage::settings::parse(input);
+        if (!anchorage::settings::validate(st).isEmpty() || anchorage::settings::parse(anchorage::settings::serialize(st)) != st) {
+            fail("settings parser produced something it can't write back");
+        }
+    }
 
     // 1. Lossless: whatever the input, serialize() gives it back byte for byte.
     File file = File::parse(input);

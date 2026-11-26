@@ -7,6 +7,16 @@
 //   anchorage-e2e-client add-shared <spec> <mount-point> <type> <opt1,opt2,...>
 //   anchorage-e2e-client remove-shared <mount-point>
 //   anchorage-e2e-client restore <backup-name> [--confirm]
+//   anchorage-e2e-client edit <spec> <mount-point> <type> <boot|request|opened> <admins|user|users>
+//                             [nofail=0|1] [netdev=0|1] [uid=N] [gid=N] [sharing=owner|read|everyone]
+//                             [opt=<option>]... [--confirm]
+//   anchorage-e2e-client edit-remove <mount-point>
+//   anchorage-e2e-client settings <keep-backups> <ntfs3|ntfs>
+//
+// "edit" builds the entry the way the entry editor does (access::defaultsFor, then
+// access::apply for the Access tab choices, opt= for the Advanced tab), adds it or
+// changes the entry already at that mount point with fstab::File, and sends the whole
+// file through anchorage::client, the GUI's own KAuth code.
 //
 // Prints one line "RESULT ok [key=value ...]" or "RESULT error <code> <message>".
 //
@@ -16,11 +26,9 @@
 // because polkit asks the agent registered for the requesting D-Bus connection.
 #include "config-anchorage.h"
 #include "fstabservice.h"
+#include "access.h"
+#include "helperclient.h"
 #include "requests.h"
-
-#include <KAuth/Action>
-#include <KAuth/ActionReply>
-#include <KAuth/ExecuteJob>
 
 #include <QCoreApplication>
 #include <QDBusConnection>
@@ -47,22 +55,79 @@ QByteArray readFile(const QString &path, bool *ok)
     return *ok ? f.readAll() : QByteArray();
 }
 
-QString errorName(int code)
+// Builds the new /etc/fstab for "edit" / "edit-remove". Empty result + message on error.
+QByteArray editFstab(const QByteArray &current, const QStringList &args, QString *error)
 {
-    using E = KAuth::ActionReply::Error;
-    switch (code) {
-    case E::NoError: return QStringLiteral("NoError");
-    case E::NoResponderError: return QStringLiteral("NoResponder");
-    case E::NoSuchActionError: return QStringLiteral("NoSuchAction");
-    case E::InvalidActionError: return QStringLiteral("InvalidAction");
-    case E::AuthorizationDeniedError: return QStringLiteral("AuthorizationDenied");
-    case E::UserCancelledError: return QStringLiteral("UserCancelled");
-    case E::HelperBusyError: return QStringLiteral("HelperBusy");
-    case E::AlreadyStartedError: return QStringLiteral("AlreadyStarted");
-    case E::DBusError: return QStringLiteral("DBusError");
-    case E::BackendError: return QStringLiteral("BackendError");
-    default: return QStringLiteral("HelperError(%1)").arg(code);
+    fstab::File file = fstab::File::parse(current);
+    const bool remove = args.at(1) == QLatin1String("edit-remove");
+    const QString mountPoint = args.at(remove ? 2 : 3);
+    const int existing = file.findMountPoint(mountPoint);
+    if (remove) {
+        if (existing < 0 || !file.remove(existing)) {
+            *error = QStringLiteral("no entry at ") + mountPoint;
+            return {};
+        }
+        return file.serialize();
     }
+    if (args.size() < 7) {
+        *error = QStringLiteral("edit needs spec, mount point, type, start and who");
+        return {};
+    }
+    fstab::Entry e;
+    e.spec = args.at(2);
+    e.mountPoint = mountPoint;
+    e.type = args.at(4);
+    QStringList base;
+    if (existing >= 0) {
+        base = file.lines().at(static_cast<std::size_t>(existing)).entry->options;
+    }
+    access::Settings s = existing >= 0 ? access::read(base, e.type) : access::defaultsFor(e.type);
+    const QHash<QString, access::Start> starts = {{QStringLiteral("boot"), access::Start::AtBoot},
+                                                  {QStringLiteral("request"), access::Start::OnRequest},
+                                                  {QStringLiteral("opened"), access::Start::WhenOpened}};
+    const QHash<QString, access::Who> whos = {{QStringLiteral("admins"), access::Who::Admins},
+                                              {QStringLiteral("user"), access::Who::AnyUser},
+                                              {QStringLiteral("users"), access::Who::AnyUserAnyoneUnmounts}};
+    const QHash<QString, access::Sharing> sharings = {{QStringLiteral("owner"), access::Sharing::OwnerOnly},
+                                                      {QStringLiteral("read"), access::Sharing::OthersRead},
+                                                      {QStringLiteral("everyone"), access::Sharing::Everyone}};
+    if (!starts.contains(args.at(5)) || !whos.contains(args.at(6))) {
+        *error = QStringLiteral("bad start or who");
+        return {};
+    }
+    s.start = starts.value(args.at(5));
+    s.who = whos.value(args.at(6));
+    QStringList extra;
+    for (const QString &a : args.mid(7)) {
+        const QString key = a.section(QLatin1Char('='), 0, 0);
+        const QString value = a.section(QLatin1Char('='), 1);
+        if (key == QLatin1String("nofail")) {
+            s.nofail = value == QLatin1String("1");
+        } else if (key == QLatin1String("netdev")) {
+            s.netdev = value == QLatin1String("1");
+        } else if (key == QLatin1String("uid")) {
+            s.uid = value.toUInt();
+        } else if (key == QLatin1String("gid")) {
+            s.gid = value.toUInt();
+        } else if (key == QLatin1String("sharing")) {
+            s.sharing = sharings.value(value);
+        } else if (key == QLatin1String("opt")) {
+            extra.append(value);
+        }
+    }
+    e.options = access::apply(base, s, e.type);
+    for (const QString &o : extra) {
+        if (!e.options.contains(o)) {
+            e.options.append(o);
+        }
+    }
+    QList<fstab::Issue> issues;
+    const bool ok = existing >= 0 ? file.replace(existing, e, &issues) : file.append(e, &issues) >= 0;
+    if (!ok) {
+        *error = issues.isEmpty() ? QStringLiteral("refused") : issues.first().message;
+        return {};
+    }
+    return file.serialize();
 }
 } // namespace
 
@@ -95,6 +160,23 @@ int main(int argc, char *argv[])
     } else if (cmd == QLatin1String("remove-shared")) {
         action = QStringLiteral("removesharedmount");
         request = requests::encodeMountPoint(args.at(2));
+    } else if ((cmd == QLatin1String("edit") && args.size() >= 7) || cmd == QLatin1String("edit-remove")) {
+        bool ok = false;
+        const QByteArray current = readFile(QStringLiteral("/etc/fstab"), &ok);
+        QString error;
+        const QByteArray proposed = editFstab(current, args, &error);
+        if (proposed.isEmpty()) {
+            out << "RESULT error usage " << error << "\n";
+            return 2;
+        }
+        action = QStringLiteral("writefstab");
+        request = requests::encodeWriteFstab({service::fingerprint(current), proposed, confirm, true});
+    } else if (cmd == QLatin1String("settings") && args.size() >= 4) {
+        action = QStringLiteral("writesettings");
+        settings::Settings st;
+        st.keepBackups = args.at(2).toInt();
+        st.ntfsDriver = args.at(3);
+        request = requests::encodeSettings(st);
     } else if (cmd == QLatin1String("restore")) {
         action = QStringLiteral("restorebackup");
         request = requests::encodeRestore({args.at(2), confirm});
@@ -116,20 +198,20 @@ int main(int argc, char *argv[])
         }
     }
 
-    KAuth::Action act(QStringLiteral(ANCHORAGE_APP_ID ".") + action);
-    act.setHelperId(QStringLiteral(ANCHORAGE_APP_ID));
-    act.setArguments(request);
-    act.setTimeout(120000);
-    KAuth::ExecuteJob *job = act.execute();
-    const bool ok = job->exec();
-    if (!ok) {
-        QString message = job->errorText().isEmpty() ? job->errorString() : job->errorText();
+    const QHash<QString, client::Action> actions = {{QStringLiteral("writefstab"), client::Action::WriteFstab},
+                                                    {QStringLiteral("addsharedmount"), client::Action::AddSharedMount},
+                                                    {QStringLiteral("removesharedmount"), client::Action::RemoveSharedMount},
+                                                    {QStringLiteral("restorebackup"), client::Action::RestoreBackup},
+                                                    {QStringLiteral("writesettings"), client::Action::WriteSettings}};
+    const client::Reply reply = client::runBlocking(actions.value(action), request);
+    if (!reply.ok()) {
+        QString message = reply.message;
         message.replace(QLatin1Char('\n'), QStringLiteral(" | "));
-        out << "RESULT error " << errorName(job->error()) << " " << message << "\n";
+        out << "RESULT error " << reply.codeName << " " << message << "\n";
         return 1;
     }
     out << "RESULT ok";
-    const QVariantMap data = job->data();
+    const QVariantMap data = reply.data;
     for (auto it = data.cbegin(); it != data.cend(); ++it) {
         const QVariant &v = it.value();
         out << " " << it.key() << "=" << (v.typeId() == QMetaType::QStringList ? v.toStringList().join(QLatin1Char(',')) : v.toString());

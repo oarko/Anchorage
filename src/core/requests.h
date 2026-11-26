@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fstab.h"
+#include "settings.h"
 #include "result.h"
 
 #include <QVariantMap>
@@ -27,11 +28,13 @@ Result<WriteFstab> decodeWriteFstab(const QVariantMap &args);
 Result<fstab::Entry> decodeEntry(const QVariantMap &args); // addsharedmount
 Result<QString> decodeMountPoint(const QVariantMap &args); // removesharedmount
 Result<Restore> decodeRestore(const QVariantMap &args);
+Result<settings::Settings> decodeSettings(const QVariantMap &args); // writesettings
 
 // Builders used by the GUI side (and tests), so both ends agree on the keys.
 QVariantMap encodeWriteFstab(const WriteFstab &request);
 QVariantMap encodeEntry(const fstab::Entry &entry);
 QVariantMap encodeMountPoint(const QString &mountPoint);
 QVariantMap encodeRestore(const Restore &request);
+QVariantMap encodeSettings(const settings::Settings &settings);
 
 } // namespace anchorage::requests

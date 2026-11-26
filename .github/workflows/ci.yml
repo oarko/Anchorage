@@ -80,6 +80,11 @@ jobs:
           mkdir -p corpus-policy
           build/fuzz/bin/policy_fuzzer -max_total_time=60 -max_len=4096 corpus-policy fuzz/seeds/policy
 
+      - name: Fuzz the option parser and Access tab mapping (1 minute)
+        run: |
+          mkdir -p corpus-options
+          build/fuzz/bin/options_fuzzer -max_total_time=60 -max_len=2048 corpus-options fuzz/seeds/options
+
       - name: Keep crash inputs
         if: failure()
         uses: actions/upload-artifact@v4

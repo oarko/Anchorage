@@ -9,7 +9,7 @@ polkit.addRule(function (action, subject) {
     }
     var name = action.id.substring(prefix.length);
     var shared = (name === "addsharedmount" || name === "removesharedmount");
-    var full = shared || name === "writefstab" || name === "restorebackup";
+    var full = shared || name === "writefstab" || name === "restorebackup" || name === "writesettings";
 
     if (full && subject.isInGroup("@DRIVEADMIN_GROUP@")) {
         return polkit.Result.AUTH_SELF_KEEP;

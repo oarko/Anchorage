@@ -76,6 +76,25 @@ public Q_SLOTS:
         return reply(service::restoreBackup(service::systemPaths(), *caller, request->backupName, request->confirmProtected));
     }
 
+    ActionReply writesettings(const QVariantMap &args)
+    {
+        const auto request = requests::decodeSettings(args);
+        if (!request) {
+            return error(request.error());
+        }
+        const auto caller = who();
+        if (!caller) {
+            return error(caller.error());
+        }
+        const service::Outcome outcome = service::writeSettings(service::systemPaths(), *caller, *request);
+        if (!outcome.ok()) {
+            ActionReply r = error(outcome.errors.join(QLatin1Char('\n')));
+            r.addData(QStringLiteral("errors"), outcome.errors);
+            return r;
+        }
+        return ActionReply::SuccessReply();
+    }
+
 private:
     static Result<Caller> who()
     {
