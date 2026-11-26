@@ -9,9 +9,12 @@
 #include <utility>
 
 // "Also show it at…" (SPEC §8): extra locations for a drive, each its own bind entry:
-//   /mnt/Lingames  /run/media/oarko/Lingames  none  bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames  0 0
-// requires-mounts-for makes the bind wait for the drive, and fail with it, instead of
-// showing the drive's empty folder.
+//   /mnt/Lingames  /run/media/oarko/Lingames  none
+//       bind,nofail,x-systemd.requires=/mnt/Lingames,x-systemd.requires-mounts-for=/mnt/Lingames  0 0
+// x-systemd.requires (Requires= + After= on the drive's mount unit) makes systemd refuse
+// the bind when the drive isn't mounted or has no fstab line at all; requires-mounts-for
+// alone only waits for a mount unit that exists, and otherwise binds the empty folder
+// (found in the VM, 2026-11-26).
 namespace anchorage::binds
 {
 
@@ -37,5 +40,12 @@ QList<std::pair<int, Bind>> findFor(const fstab::File &file, const QString &moun
 // `oldMountPoint`) are changed in place, extra ones removed, new ones added at the end of
 // the file. Returns false (file unchanged) if an entry is refused.
 bool apply(fstab::File &file, const QString &oldMountPoint, const fstab::Entry &drive, const QList<Bind> &binds, QString *error = nullptr);
+
+// Folders a bind entry depends on (x-systemd.requires=/path and requires-mounts-for=).
+QStringList dependsOn(const fstab::Entry &bind);
+
+// Bind entries whose drive is gone: they depend on a mount point that no entry in the file
+// mounts. Line indexes, in file order.
+QList<int> orphaned(const fstab::File &file);
 
 } // namespace anchorage::binds

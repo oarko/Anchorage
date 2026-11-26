@@ -47,10 +47,13 @@ QList<TileDelegate::Chip> TileDelegate::chips(const Item &it)
     if (it.deviceMissing) {
         out.append({i18n("Device not found"), Chip::Negative});
     }
+    if (it.orphanedBind) {
+        out.append({i18n("Drive not in fstab"), Chip::Negative});
+    }
     if (it.mounted) {
         out.append({i18n("Mounted"), Chip::Positive});
     }
-    if (it.entry) {
+    if (it.entry && !it.orphanedBind) { // an orphaned bind isn't mounted at start-up whatever it says
         out.append({InventoryModel::startupText(it.startup), Chip::Neutral});
     } else if (it.kind != Kind::Swap) {
         out.append({i18n("Not in fstab"), Chip::Neutral});

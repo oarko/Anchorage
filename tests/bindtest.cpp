@@ -75,7 +75,9 @@ private Q_SLOTS:
         auto e = binds::makeEntry(drive, {QString(), QStringLiteral("/run/media/oarko/Lingames")});
         QCOMPARE(e.spec, QStringLiteral("/mnt/Lingames"));
         QCOMPARE(e.type, QStringLiteral("none"));
-        QCOMPARE(e.options, QStringList({QStringLiteral("bind"), QStringLiteral("nofail"), QStringLiteral("x-systemd.requires-mounts-for=/mnt/Lingames")}));
+        QCOMPARE(e.options, QStringList({QStringLiteral("bind"), QStringLiteral("nofail"), QStringLiteral("x-systemd.requires=/mnt/Lingames"),
+                                         QStringLiteral("x-systemd.requires-mounts-for=/mnt/Lingames")}));
+        QCOMPARE(binds::dependsOn(e), QStringList{QStringLiteral("/mnt/Lingames")});
         fstab::Entry automount = drive;
         automount.options = {QStringLiteral("nofail"), QStringLiteral("noauto"), QStringLiteral("x-systemd.automount")};
         e = binds::makeEntry(automount, {QStringLiteral("SteamLibrary"), QStringLiteral("/home/oarko/Games")});
@@ -105,9 +107,11 @@ private Q_SLOTS:
                  qPrintable(error));
         const QByteArray out = lines(f);
         // The existing bind keeps its line and columns; the new one is added at the end.
-        QVERIFY2(out.contains("\n/mnt/Lingames/Old              /srv/old  none  bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames 0 0\ntmpfs"),
-                 out.constData());
-        QVERIFY(out.endsWith("/mnt/Lingames /run/media/oarko/Lingames none bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames 0 0\n"));
+        const QByteArray opts = "bind,nofail,x-systemd.requires=/mnt/Lingames,x-systemd.requires-mounts-for=/mnt/Lingames";
+        const QByteArray oldBind = QByteArray("\n/mnt/Lingames/Old              /srv/old  none  ") + opts + QByteArray(" 0 0\ntmpfs");
+        const QByteArray keptBind = QByteArray("/mnt/Lingames /run/media/oarko/Lingames none ") + opts + QByteArray(" 0 0\n");
+        QVERIFY2(out.contains(oldBind), out.constData());
+        QVERIFY(out.endsWith(keptBind));
         QVERIFY(out.startsWith("# comment\n")); // the rest of the file is untouched
         QVERIFY(out.contains("tmpfs  /tmp  tmpfs  defaults  0 0\n"));
         QCOMPARE(binds::findFor(f, QStringLiteral("/mnt/Lingames")).size(), 2);
@@ -119,6 +123,16 @@ private Q_SLOTS:
         const QByteArray before = lines(f);
         QVERIFY(!binds::apply(f, QStringLiteral("/mnt/Lingames"), drive, {{QString(), QStringLiteral("relative")}}, &error));
         QCOMPARE(lines(f), before);
+    }
+
+    void orphanedBindsAreFound()
+    {
+        const fstab::File f = fstab::File::parse("UUID=1 /mnt/a ext4 nofail 0 0\n"
+                                                 "/mnt/a /srv/a none bind,x-systemd.requires=/mnt/a 0 0\n"                // drive present
+                                                 "/mnt/gone /srv/b none bind,x-systemd.requires=/mnt/gone 0 0\n"          // drive gone
+                                                 "/mnt/gone/x /srv/c none bind,x-systemd.requires-mounts-for=/mnt/gone 0 0\n" // old style, gone
+                                                 "/home/oarko/Games /srv/d none bind 0 0\n");                              // no drive: fine
+        QCOMPARE(binds::orphaned(f), QList<int>({2, 3}));
     }
 
     void bindSourcesAreChecked_data()

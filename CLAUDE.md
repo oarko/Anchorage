@@ -19,6 +19,13 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
   Browse, and "Also show it at…" bind entries with the bind-source rule, SPEC §8.
   Next: a hands-on pass in the VM's Plasma session, then network shares (SPEC §11).
   Later: mounting removable drives as the user through UDisks (like Dolphin).
+- Bind entries must carry `x-systemd.requires=<drive>`: `requires-mounts-for` alone binds the
+  drive's EMPTY folder from the system disk when the drive has no fstab line (VM, 2026-11-26).
+- **Real drives**: `tests/vm/realdrives.sh attach|detach|status` attaches the developer's
+  Lingames (btrfs) and Windows (NTFS) disks to the VM by serial number (refuses while mounted
+  on the host; needs a temporary `setfacl` by the user). `tests/vm/realdrives_test.sh` (~15 min)
+  runs `realdrives_scenarios.py` against them (only an `anchorage-test` folder is written and
+  removed), then resets the VM and installs Anchorage fresh for hands-on testing.
 - SMB share *creation* is a planned phase 2 feature (SPEC §16); keep v1 scope to mounting.
 - Ask the user before starting implementation.
 

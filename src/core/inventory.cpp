@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "inventory.h"
 
+#include "binds.h"
+
 #include "mountpolicy.h"
 
 #include <QFileInfo>
@@ -163,6 +165,7 @@ QList<Item> build(const fstab::File &fstab, const QList<Volume> &volumes, const 
     // Specs of the file system mounted at "/": its other subvolumes (/home, /swap, ...) are
     // part of the installed system too.
     QStringList rootSpecs;
+    const QList<int> orphans = binds::orphaned(fstab);
     for (const int line : fstab.entryLines()) {
         const auto &e = fstab.lines().at(static_cast<std::size_t>(line)).entry;
         if (e && e->mountPoint == QLatin1String("/")) {
@@ -205,6 +208,7 @@ QList<Item> build(const fstab::File &fstab, const QList<Volume> &volumes, const 
             }
         }
         it.deviceMissing = !it.volume && isLocalDeviceSpec(e.spec);
+        it.orphanedBind = orphans.contains(line);
         if (it.kind != Kind::Swap) {
             if (const auto *m = mountAt(e.mountPoint)) {
                 it.mounted = true;

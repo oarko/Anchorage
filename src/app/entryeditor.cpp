@@ -1217,6 +1217,15 @@ QList<Issue> EntryEditor::issues() const
         }
         targets.append(b.target);
     }
+    if (binds::isBind(m_entry)) {
+        for (const QString &dep : binds::dependsOn(m_entry)) {
+            if (!m_ctx.otherMountPoints.contains(dep)) {
+                warn(QStringLiteral("spec"), i18n("This place shows %1, which no entry in /etc/fstab mounts. It won't be mounted until that drive is "
+                                                  "added again.",
+                                                  dep));
+            }
+        }
+    }
     if (m_entry.type == QLatin1String("none") && !m_entry.options.contains(QStringLiteral("bind")) && !m_entry.options.contains(QStringLiteral("rbind"))) {
         error(QStringLiteral("options"), i18n("A bind mount needs the 'bind' option (Advanced tab)."));
     }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mountplan.h"
 
+#include "binds.h"
 #include "mountpolicy.h"
 
 #include <QRegularExpression>
@@ -131,10 +132,9 @@ MountPlan planMountEntry(QByteArrayView fstabData, const QString &mountPoint, co
     // mount ignores x-systemd.requires-mounts-for: without this check a bind entry would
     // show the drive's empty folder when the drive isn't mounted. (systemd checks it itself.)
     if (plan.method == Method::MountCommand) {
-        static const QString requires_ = QStringLiteral("x-systemd.requires-mounts-for=");
-        for (const QString &o : entry->options) {
-            if (o.startsWith(requires_) && !mountedAt(current, o.mid(requires_.size()))) {
-                plan.errors.append(QStringLiteral("Mount %1 first: %2 shows what is on it.").arg(o.mid(requires_.size()), mountPoint));
+        for (const QString &dep : binds::dependsOn(*entry)) {
+            if (!mountedAt(current, dep)) {
+                plan.errors.append(QStringLiteral("Mount %1 first: %2 shows what is on it.").arg(dep, mountPoint));
             }
         }
     }

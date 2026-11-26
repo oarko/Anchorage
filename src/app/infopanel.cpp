@@ -210,6 +210,11 @@ void InfoPanel::showItem(const std::optional<Item> &item)
         addRow(i18n("Options:"), it.entry->options.isEmpty() ? QStringLiteral("defaults") : it.entry->options.join(QLatin1Char(',')), true);
     }
     addRow(i18n("Status:"), it.deviceMissing ? i18n("The device isn't connected") : it.mounted ? i18n("Mounted") : i18n("Not mounted"));
+    if (it.orphanedBind) {
+        addRow(i18n("Problem:"), i18n("This shows %1, which is no longer a drive in /etc/fstab. It isn't mounted at start-up; remove it, or add the "
+                                      "drive again.",
+                                      it.entry ? it.entry->spec : QString()));
+    }
     if (it.mounted && (it.mountedAt != it.mountPoint || !it.entry)) {
         addRow(i18n("Mounted at:"), it.mountedAt, true);
     }
