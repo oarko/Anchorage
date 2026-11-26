@@ -15,6 +15,8 @@ add_library(anchorage_ui STATIC
     inventorymodel.h
     mainwindow.cpp
     mainwindow.h
+    mountatdialog.cpp
+    mountatdialog.h
     placespanel.cpp
     placespanel.h
     settingsdialog.cpp

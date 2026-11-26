@@ -11,6 +11,7 @@
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QLabel>
+#include <QAction>
 #include <QPushButton>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -22,6 +23,8 @@ InfoPanel::InfoPanel(QWidget *parent)
 {
     setObjectName(QStringLiteral("info"));
     auto *layout = new QVBoxLayout(this);
+    // Never squeeze the rows: the scroll area around the panel scrolls instead.
+    layout->setSizeConstraint(QLayout::SetMinAndMaxSize);
     layout->setContentsMargins(14, 14, 14, 14);
     layout->setSpacing(8);
 
@@ -76,17 +79,9 @@ InfoPanel::InfoPanel(QWidget *parent)
     m_adminBox = new QWidget(this);
     auto *adminLayout = new QVBoxLayout(m_adminBox);
     adminLayout->setContentsMargins(0, 6, 0, 0);
-    auto *adminTitle = new QLabel(i18n("Administrator"), m_adminBox);
+    auto *adminTitle = new QLabel(i18n("Actions"), m_adminBox);
     adminTitle->setFont(bold);
-    m_edit = new QPushButton(QIcon::fromTheme(QStringLiteral("document-edit")), QString(), m_adminBox);
-    m_edit->setObjectName(QStringLiteral("info.edit"));
-    m_remove = new QPushButton(QIcon::fromTheme(QStringLiteral("list-remove")), i18n("Remove from fstab"), m_adminBox);
-    m_remove->setObjectName(QStringLiteral("info.remove"));
     adminLayout->addWidget(adminTitle);
-    adminLayout->addWidget(m_edit);
-    adminLayout->addWidget(m_remove);
-    connect(m_edit, &QPushButton::clicked, this, &InfoPanel::editRequested);
-    connect(m_remove, &QPushButton::clicked, this, &InfoPanel::removeRequested);
     m_adminBox->hide();
 
     m_note = new QLabel(this);
@@ -111,12 +106,26 @@ InfoPanel::InfoPanel(QWidget *parent)
     showSummary(0, 0, QString());
 }
 
-void InfoPanel::setActions(const QString &editText, bool canRemove, const QString &hint)
+void InfoPanel::setActions(const QList<QAction *> &actions, const QString &hint)
 {
-    m_adminBox->setVisible(!editText.isEmpty() || canRemove);
-    m_edit->setVisible(!editText.isEmpty());
-    m_edit->setText(editText);
-    m_remove->setVisible(canRemove);
+    // deleteLater: the clicked button may be the one being replaced.
+    for (QPushButton *b : std::as_const(m_actionButtons)) {
+        b->hide();
+        b->setObjectName(QString());
+        b->deleteLater();
+    }
+    m_actionButtons.clear();
+    for (QAction *a : actions) {
+        if (!a->isVisible() || !a->isEnabled()) {
+            continue;
+        }
+        auto *b = new QPushButton(a->icon(), a->text(), m_adminBox);
+        b->setObjectName(QStringLiteral("info.") + a->objectName());
+        connect(b, &QPushButton::clicked, a, &QAction::trigger);
+        m_adminBox->layout()->addWidget(b);
+        m_actionButtons.append(b);
+    }
+    m_adminBox->setVisible(!m_actionButtons.isEmpty());
     m_note->setText(hint);
 }
 

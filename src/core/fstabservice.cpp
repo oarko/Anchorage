@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "fstabservice.h"
 
+#include "mountplan.h"
 #include "mountpolicy.h"
+#include "mounts.h"
 #include "paths.h"
 #include "safefs.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QFile>
 #include <QFileInfo>
+#include <QSet>
+#include <QDir>
+#include <QDirIterator>
+#include <QProcess>
 #include <QRegularExpression>
 
 #include <algorithm>
@@ -287,6 +294,238 @@ Outcome writeSettings(const Paths &paths, const Caller &caller, const settings::
         return failed(st.error);
     }
     return {};
+}
+
+Runner systemRunner()
+{
+    return [](const QString &program, const QStringList &args) {
+        QProcess p;
+        p.setProcessChannelMode(QProcess::MergedChannels);
+        // A fixed, minimal environment: nothing from the caller reaches mount's helpers.
+        QProcessEnvironment env;
+        env.insert(QStringLiteral("PATH"), QStringLiteral("/usr/sbin:/usr/bin:/sbin:/bin"));
+        env.insert(QStringLiteral("LANG"), QStringLiteral("C.UTF-8"));
+        p.setProcessEnvironment(env);
+        p.start(program, args);
+        CommandResult r;
+        if (!p.waitForStarted(10000)) {
+            r.output = QStringLiteral("Could not start %1.").arg(program);
+            return r;
+        }
+        if (!p.waitForFinished(120000)) {
+            p.kill();
+            p.waitForFinished();
+            r.output = QStringLiteral("%1 did not finish within 2 minutes.").arg(program);
+            return r;
+        }
+        r.exitCode = p.exitStatus() == QProcess::NormalExit ? p.exitCode() : -1;
+        r.output = QString::fromUtf8(p.readAll()).trimmed();
+        return r;
+    };
+}
+
+namespace
+{
+const QString kMount = QStringLiteral("/usr/bin/mount");
+const QString kUmount = QStringLiteral("/usr/bin/umount");
+const QString kSystemctl = QStringLiteral("/usr/bin/systemctl");
+const QString kJournalctl = QStringLiteral("/usr/bin/journalctl");
+
+QList<mounts::Mount> currentMounts(const Paths &paths)
+{
+    auto m = mounts::readCurrent(paths.mountInfo);
+    return m ? *m : QList<mounts::Mount>{};
+}
+
+// Creates a missing mount-point folder with the rules used when saving (SPEC §7).
+Status ensureMountPoint(const Paths &paths, const Caller &caller, const QString &mountPoint, bool mustBeEmpty, QStringList *created)
+{
+    const QString real = paths.mountRoot + mountPoint;
+    if (safefs::exists(real)) {
+        if (mustBeEmpty) {
+            auto empty = safefs::isEmptyDirectory(real);
+            if (!empty) {
+                return Status::failure(empty.error());
+            }
+            if (!*empty) {
+                return Status::failure(QStringLiteral("%1 is not empty. Outside the usual mount locations, only empty folders can be used.").arg(mountPoint));
+            }
+        }
+        return safefs::openDirectory(real) ? Status::success() : Status::failure(QStringLiteral("%1 is not a folder, or is reached through a link.").arg(mountPoint));
+    }
+    const auto zone = policy::classifyMountPoint(mountPoint, extraBlocked(paths)).zone;
+    const bool allowed = zone == policy::Zone::Safe || (zone == policy::Zone::Override && caller.fullAccess()) || (zone == policy::Zone::Blocked && caller.sudo);
+    if (!allowed) {
+        return Status::failure(QStringLiteral("The folder %1 doesn't exist, and you can't create folders there.").arg(mountPoint));
+    }
+    return safefs::makeDirectories(real, 0755, ownerFor(paths, mountPoint), created);
+}
+
+// systemd only says "see journalctl": fetch the unit's last messages for the real reason.
+QString journalReason(const Runner &run, const QString &unit)
+{
+    const CommandResult j = run(kJournalctl, {QStringLiteral("--no-pager"), QStringLiteral("-o"), QStringLiteral("cat"), QStringLiteral("-b"),
+                                              QStringLiteral("-n"), QStringLiteral("8"), QStringLiteral("-u"), unit});
+    return j.output.trimmed();
+}
+} // namespace
+
+MountOutcome mountEntry(const Paths &paths, const Caller &caller, const QString &mountPoint, const Runner &run)
+{
+    MountOutcome out;
+    auto fstabData = readFstab(paths);
+    if (!fstabData) {
+        out.errors.append(fstabData.error());
+        return out;
+    }
+    const mounting::MountPlan plan = mounting::planMountEntry(*fstabData, mountPoint, caller, currentMounts(paths));
+    if (!plan.ok()) {
+        out.errors = plan.errors;
+        return out;
+    }
+    if (Status s = ensureMountPoint(paths, caller, mountPoint, false, &out.createdDirs); !s) {
+        out.errors.append(s.error);
+        return out;
+    }
+    if (plan.method == mounting::Method::Systemd) {
+        const QString unit = mounting::unitName(mountPoint) + QStringLiteral(".mount");
+        const CommandResult r = run(kSystemctl, {QStringLiteral("start"), unit});
+        if (r.exitCode != 0) {
+            const QString why = journalReason(run, unit);
+            out.errors.append(QStringLiteral("Mounting %1 failed.%2").arg(mountPoint, why.isEmpty() ? QString() : QLatin1Char('\n') + why));
+            return out;
+        }
+    } else {
+        const QString fstabPath = paths.fstabDir + QLatin1Char('/') + paths.fstabName;
+        const CommandResult r = run(kMount, {QStringLiteral("--fstab"), fstabPath, mountPoint});
+        if (r.exitCode != 0) {
+            out.errors.append(r.output.isEmpty() ? QStringLiteral("Mounting %1 failed.").arg(mountPoint) : r.output);
+            return out;
+        }
+    }
+    // With nofail, mount reports success for a device that isn't there and mounts
+    // nothing (found by tests/vm/editor_scenarios.py). Check what really happened.
+    if (!mounting::mountedAt(currentMounts(paths), mountPoint)) {
+        out.errors.append(plan.entry.options.contains(QStringLiteral("nofail"))
+                              ? QStringLiteral("Nothing was mounted at %1: the device %2 isn't connected (\"start even if missing\" hides the error).")
+                                    .arg(mountPoint, plan.entry.spec)
+                              : QStringLiteral("Nothing was mounted at %1.").arg(mountPoint));
+    }
+    return out;
+}
+
+MountOutcome mountTemporary(const Paths &paths, const Caller &caller, const fstab::Entry &entry, bool confirmProtected, const Runner &run)
+{
+    MountOutcome out;
+    auto fstabData = readFstab(paths);
+    if (!fstabData) {
+        out.errors.append(fstabData.error());
+        return out;
+    }
+    const mounting::TemporaryPlan plan =
+        mounting::planTemporaryMount(entry, caller, confirmProtected, *fstabData, currentMounts(paths), extraBlocked(paths));
+    if (!plan.ok()) {
+        out.errors = plan.errors;
+        return out;
+    }
+    if (Status s = ensureMountPoint(paths, caller, entry.mountPoint, plan.overrideZone, &out.createdDirs); !s) {
+        out.errors.append(s.error);
+        return out;
+    }
+    QStringList args = {QStringLiteral("-t"), entry.type};
+    if (!entry.options.isEmpty()) {
+        args << QStringLiteral("-o") << entry.options.join(QLatin1Char(','));
+    }
+    args << entry.spec << entry.mountPoint;
+    const CommandResult r = run(kMount, args);
+    if (r.exitCode != 0) {
+        out.errors.append(r.output.isEmpty() ? QStringLiteral("Mounting %1 failed.").arg(entry.mountPoint) : r.output);
+    } else if (!mounting::mountedAt(currentMounts(paths), entry.mountPoint)) {
+        out.errors.append(QStringLiteral("Nothing was mounted at %1.").arg(entry.mountPoint));
+    }
+    return out;
+}
+
+MountOutcome unmount(const Paths &paths, const Caller &caller, const QString &mountPoint, bool confirmSystem, const Runner &run)
+{
+    MountOutcome out;
+    auto fstabData = readFstab(paths);
+    if (!fstabData) {
+        out.errors.append(fstabData.error());
+        return out;
+    }
+    const mounting::UnmountPlan plan = mounting::planUnmount(*fstabData, currentMounts(paths), mountPoint, caller, confirmSystem);
+    if (!plan.ok()) {
+        out.errors = plan.errors;
+        return out;
+    }
+    CommandResult r;
+    if (plan.method == mounting::Method::Systemd) {
+        const QString unit = mounting::unitName(mountPoint) + QStringLiteral(".mount");
+        r = run(kSystemctl, {QStringLiteral("stop"), unit});
+        if (r.exitCode != 0) {
+            r.output = journalReason(run, unit);
+        }
+    } else {
+        r = run(kUmount, {mountPoint});
+    }
+    if (r.exitCode == 0 && !mounting::mountedAt(currentMounts(paths), mountPoint)) {
+        return out;
+    }
+    if (r.exitCode == 0) {
+        r.output = QStringLiteral("%1 is still mounted.").arg(mountPoint);
+    }
+    out.processes = processesUsing(paths.mountRoot + mountPoint, paths.procRoot);
+    if (!out.processes.isEmpty() || r.output.contains(QLatin1String("busy"))) {
+        out.errors.append(out.processes.isEmpty() ? QStringLiteral("%1 is in use.").arg(mountPoint)
+                                                  : QStringLiteral("%1 is in use by: %2.").arg(mountPoint, out.processes.join(QStringLiteral(", "))));
+    } else {
+        out.errors.append(r.output.isEmpty() ? QStringLiteral("Unmounting %1 failed.").arg(mountPoint) : r.output);
+    }
+    return out;
+}
+
+QStringList processesUsing(const QString &path, const QString &procRoot)
+{
+    struct stat target {
+    };
+    if (::stat(QFile::encodeName(path).constData(), &target) != 0) {
+        return {};
+    }
+    QSet<QString> names;
+    const auto onTarget = [&target](const QString &p) {
+        struct stat st {
+        };
+        return ::stat(QFile::encodeName(p).constData(), &st) == 0 && st.st_dev == target.st_dev;
+    };
+    const QDir proc(procRoot);
+    for (const QString &pid : proc.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        bool isNumber = false;
+        pid.toInt(&isNumber);
+        if (!isNumber) {
+            continue;
+        }
+        const QString base = procRoot + QLatin1Char('/') + pid;
+        bool uses = onTarget(base + QStringLiteral("/cwd")) || onTarget(base + QStringLiteral("/root"));
+        if (!uses) {
+            QDirIterator fds(base + QStringLiteral("/fd"), QDir::AllEntries | QDir::System | QDir::NoDotAndDotDot);
+            while (!uses && fds.hasNext()) {
+                uses = onTarget(fds.next());
+            }
+        }
+        if (uses) {
+            QFile comm(base + QStringLiteral("/comm"));
+            if (comm.open(QIODevice::ReadOnly)) {
+                const QString name = QString::fromUtf8(comm.read(64)).trimmed();
+                if (!name.isEmpty()) {
+                    names.insert(name);
+                }
+            }
+        }
+    }
+    QStringList out(names.cbegin(), names.cend());
+    out.sort();
+    return out;
 }
 
 bool isBackupName(const QString &name)

@@ -31,3 +31,21 @@ Name=Change Anchorage's settings
 Description=Changing Anchorage's system-wide settings requires authentication
 Policy=auth_admin
 Persistence=session
+
+[@APP_ID@.mountentry]
+Name=Mount a drive or share from /etc/fstab
+Description=Mounting a drive or network share requires authentication
+Policy=auth_admin
+Persistence=session
+
+[@APP_ID@.mounttemporary]
+Name=Mount a drive or share at a chosen folder
+Description=Mounting a drive or network share at a chosen folder requires authentication
+Policy=auth_admin
+Persistence=session
+
+[@APP_ID@.unmount]
+Name=Unmount a drive or share
+Description=Unmounting a drive or network share requires authentication
+Policy=auth_admin
+Persistence=session

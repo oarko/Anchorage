@@ -20,6 +20,6 @@ struct Mount {
 };
 
 QList<Mount> parseMountInfo(QByteArrayView data);
-Result<QList<Mount>> readCurrent(); // /proc/self/mountinfo
+Result<QList<Mount>> readCurrent(const QString &path = QStringLiteral("/proc/self/mountinfo"));
 
 } // namespace anchorage::mounts

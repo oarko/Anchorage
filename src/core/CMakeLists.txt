@@ -19,6 +19,8 @@ add_library(anchorage_core STATIC
     mounts.h
     fstabservice.cpp
     fstabservice.h
+    mountplan.cpp
+    mountplan.h
     mountpolicy.cpp
     mountpolicy.h
     result.h

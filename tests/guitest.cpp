@@ -37,6 +37,7 @@
 #include <QTest>
 #include <QTimer>
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 
@@ -67,10 +68,18 @@ public:
         s.fstab = m_fstab;
         s.volumes = *drives::parseLsblk(readData(QStringLiteral("lsblk-desktop.json")));
         s.mounts = mounts::parseMountInfo(readData(QStringLiteral("mountinfo-desktop.txt")));
+        s.mounts.erase(std::remove_if(s.mounts.begin(), s.mounts.end(),
+                                      [this](const mounts::Mount &m) {
+                                          return unmounted.contains(m.target);
+                                      }),
+                       s.mounts.end());
+        s.mounts += mountedNow;
         s.backups = m_backupNames;
         s.me.name = QStringLiteral("oarko");
         s.me.sudo = m_admin;
         s.me.driveAdmin = m_admin;
+        s.me.uid = 1000;
+        s.me.gid = 1000;
         s.accounts = {{1000, 1000, QStringLiteral("oarko"), QStringLiteral("Oarko")}, {1001, 1001, QStringLiteral("anna"), QString()}};
         s.settings = settings;
         return s;
@@ -115,14 +124,82 @@ public:
             r.message = QStringLiteral("changed meanwhile");
         }
         if (r.ok()) {
+            const QString saved = QStringLiteral("fstab-2026-11-25T10-00-0%1Z").arg(writes.size() % 10);
+            m_backups.insert(saved, m_fstab);
+            m_backupNames.prepend(saved);
             m_fstab = request.content;
-            r.data.insert(QStringLiteral("backup"), QStringLiteral("fstab-2026-11-25T10-00-00Z"));
+            r.data.insert(QStringLiteral("backup"), saved);
         } else if (r.message.isEmpty()) {
             r.message = QStringLiteral("refused for the test");
         }
         done(r);
     }
     QList<verify::Finding> verify(const QByteArray &) override { return findings; }
+
+    // Mounting: recorded, and reflected in what load() reports.
+    void mountEntry(const QString &mountPoint, QWidget *, Done done) override
+    {
+        calls.append(QStringLiteral("mount:") + mountPoint);
+        client::Reply r;
+        if (failMount.contains(mountPoint)) {
+            r.message = QStringLiteral("mount: %1: can't find the device.").arg(mountPoint);
+        } else {
+            r.status = client::Reply::Status::Ok;
+            setMounted(mountPoint, true);
+        }
+        done(r);
+    }
+    void mountTemporary(const requests::TemporaryMount &request, QWidget *, Done done) override
+    {
+        calls.append(QStringLiteral("mount-at:") + request.entry.mountPoint);
+        temporary.append(request);
+        client::Reply r;
+        r.status = client::Reply::Status::Ok;
+        setMounted(request.entry.mountPoint, true);
+        done(r);
+    }
+    void unmount(const requests::Unmount &request, QWidget *, Done done) override
+    {
+        calls.append(QStringLiteral("unmount:%1%2").arg(request.mountPoint, request.confirmSystem ? QStringLiteral(" (confirmed)") : QString()));
+        client::Reply r;
+        if (busyTimes > 0) {
+            --busyTimes;
+            r.message = QStringLiteral("%1 is in use by: dolphin, bash.").arg(request.mountPoint);
+            r.data.insert(QStringLiteral("processes"), QStringList{QStringLiteral("bash"), QStringLiteral("dolphin")});
+        } else {
+            r.status = client::Reply::Status::Ok;
+            setMounted(request.mountPoint, false);
+        }
+        done(r);
+    }
+    void userMount(const QString &mountPoint, bool mount, Done done) override
+    {
+        calls.append((mount ? QStringLiteral("user-mount:") : QStringLiteral("user-umount:")) + mountPoint);
+        client::Reply r;
+        r.status = client::Reply::Status::Ok;
+        setMounted(mountPoint, mount);
+        done(r);
+    }
+    void setMounted(const QString &target, bool on)
+    {
+        if (on) {
+            unmounted.removeAll(target);
+            mountedNow.append({QStringLiteral("/dev/test"), target, QStringLiteral("ext4"), QStringLiteral("/"), QStringLiteral("rw")});
+        } else {
+            unmounted.append(target);
+            mountedNow.erase(std::remove_if(mountedNow.begin(), mountedNow.end(),
+                                            [&target](const mounts::Mount &m) {
+                                                return m.target == target;
+                                            }),
+                             mountedNow.end());
+        }
+    }
+    QStringList calls;
+    QStringList failMount;
+    int busyTimes = 0;
+    QList<requests::TemporaryMount> temporary;
+    QList<mounts::Mount> mountedNow;
+    QStringList unmounted;
 
     void changeOnDisk(const QByteArray &content)
     {
@@ -348,7 +425,7 @@ private Q_SLOTS:
         w.show();
         QVERIFY(QTest::qWaitForWindowExposed(&w));
         selectTile(w, QStringLiteral("Lingames"));
-        QCOMPARE(w.findChild<QPushButton *>(QStringLiteral("info.edit"))->text(), QStringLiteral("Add to fstab…"));
+        QCOMPARE(w.findChild<QPushButton *>(QStringLiteral("info.entry_edit"))->text(), QStringLiteral("Add to fstab…"));
 
         EntryEditor *e = openEditor(w, [&w] { w.editSelected(); });
         QVERIFY(e);
@@ -402,7 +479,7 @@ private Q_SLOTS:
         // After saving, the drive is an fstab entry.
         QCOMPARE(visibleTiles(w), 12);
         selectTile(w, QStringLiteral("Lingames"));
-        QCOMPARE(w.findChild<QPushButton *>(QStringLiteral("info.edit"))->text(), QStringLiteral("Edit…"));
+        QCOMPARE(w.findChild<QPushButton *>(QStringLiteral("info.entry_edit"))->text(), QStringLiteral("Edit…"));
     }
 
     void applySendsBaselineFingerprintAndKeepsChangesOnFailure()
@@ -795,6 +872,198 @@ private Q_SLOTS:
         e->accept();
         QCoreApplication::processEvents();
         QVERIFY(w.pendingContent().contains(" ntfs3 "));
+    }
+
+    void mountAndUnmountAnEntry()
+    {
+        auto *src = new FixtureSource(true, "UUID=0000000000000003 /mnt/win ntfs3 nofail 0 0\n");
+        MainWindow w(src);
+        w.resize(1280, 800);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectTile(w, QStringLiteral("win"));
+        auto *mount = w.findChild<QPushButton *>(QStringLiteral("info.mount"));
+        QVERIFY(mount && mount->isVisible());
+        QVERIFY(!w.findChild<QPushButton *>(QStringLiteral("info.unmount"))); // not mounted
+        screenshot(w, QStringLiteral("mount-button"));
+        mount->click();
+        QCoreApplication::processEvents();
+        QCOMPARE(src->calls, QStringList{QStringLiteral("mount:/mnt/win")});
+
+        // In use the first time: the programs are named, Try Again unmounts.
+        selectTile(w, QStringLiteral("win"));
+        QVERIFY(w.actionCollection()->action(QStringLiteral("unmount"))->isEnabled());
+        src->busyTimes = 1;
+        bool retried = false;
+        clickInNextDialog(QStringLiteral("Try Again"), &retried);
+        QSignalSpy finished(&w, &MainWindow::mountFinished);
+        w.unmountSelected();
+        QVERIFY(retried);
+        QCOMPARE(src->calls.mid(1), QStringList({QStringLiteral("unmount:/mnt/win"), QStringLiteral("unmount:/mnt/win")}));
+        QCOMPARE(finished.count(), 1);
+        QVERIFY(finished.at(0).at(0).toBool());
+    }
+
+    void mountWaitsForApply()
+    {
+        auto *src = new FixtureSource(true, "UUID=0000000000000003 /mnt/win ntfs3 nofail 0 0\n");
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectTile(w, QStringLiteral("win"));
+        EntryEditor *e = openEditor(w, [&w] { w.editSelected(); });
+        e->findChild<QRadioButton *>(QStringLiteral("access.start.1"))->click();
+        e->accept();
+        QCoreApplication::processEvents();
+        selectTile(w, QStringLiteral("win"));
+        QVERIFY(!w.actionCollection()->action(QStringLiteral("mount"))->isEnabled());
+        QVERIFY(w.findChild<QLabel *>(QStringLiteral("info.note"))->text().contains(QLatin1String("Apply")));
+    }
+
+    void anyUserEntriesMountAsThePerson()
+    {
+        auto *src = new FixtureSource(false, "UUID=0000000000000003 /mnt/win ntfs3 nofail,noauto,users 0 0\n");
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectTile(w, QStringLiteral("win"));
+        w.mountSelected();
+        selectTile(w, QStringLiteral("win"));
+        w.unmountSelected();
+        QCOMPARE(src->calls, QStringList({QStringLiteral("user-mount:/mnt/win"), QStringLiteral("user-umount:/mnt/win")}));
+    }
+
+    void systemUnmountNeedsTypedConfirmation()
+    {
+        auto *src = new FixtureSource(true);
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectPlace(w, PlacesPanel::Place::System);
+        selectTile(w, QStringLiteral("Home"));
+        QVERIFY(w.actionCollection()->action(QStringLiteral("unmount"))->isEnabled());
+        bool typed = false;
+        QTimer::singleShot(100, [&typed] {
+            auto *dlg = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dlg || dlg->objectName() != QLatin1String("confirmProtected")) {
+                return;
+            }
+            auto *ok = dlg->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+            auto *edit = dlg->findChild<QLineEdit *>(QStringLiteral("confirm.path"));
+            edit->setText(QStringLiteral("/hom")); // not yet
+            typed = !ok->isEnabled();
+            edit->setText(QStringLiteral("/home"));
+            typed = typed && ok->isEnabled();
+            ok->click();
+        });
+        w.unmountSelected();
+        QVERIFY(typed);
+        QCOMPARE(src->calls, QStringList{QStringLiteral("unmount:/home (confirmed)")});
+
+        // A standard user can't unmount system entries at all.
+        MainWindow w2(new FixtureSource(false));
+        w2.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w2));
+        selectTile(w2, QStringLiteral("Lingames")); // mounted by Dolphin, not in fstab
+        QVERIFY(!w2.actionCollection()->action(QStringLiteral("unmount"))->isEnabled());
+    }
+
+    void mountAtAFolder()
+    {
+        auto *src = new FixtureSource(true);
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectTile(w, QStringLiteral("2.0 TB NTFS partition"));
+        QDialog *dlg = nullptr;
+        connect(&w, &MainWindow::mountAtOpened, this, [&dlg](QDialog *d) { dlg = d; });
+        w.findChild<QPushButton *>(QStringLiteral("info.mount_at"))->click();
+        QVERIFY(dlg);
+        auto *mp = dlg->findChild<QLineEdit *>(QStringLiteral("mountAt.mountPoint"));
+        QCOMPARE(mp->text(), QStringLiteral("/mnt/nvme0n1p3")); // no label: the device name
+        QCOMPARE(dlg->findChild<QComboBox *>(QStringLiteral("mountAt.type"))->currentText(), QStringLiteral("ntfs3"));
+        QVERIFY(dlg->findChild<QPushButton *>(QStringLiteral("mountAt.browse")));
+        screenshot(*dlg, QStringLiteral("mount-at"));
+        auto *ok = dlg->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+        mp->setText(QStringLiteral("/tmp")); // protected and not allowed
+        QVERIFY(!ok->isEnabled());
+        mp->setText(QStringLiteral("/mnt/windows"));
+        QVERIFY(ok->isEnabled());
+        dlg->accept();
+        QCoreApplication::processEvents();
+        QCOMPARE(src->calls, QStringList{QStringLiteral("mount-at:/mnt/windows")});
+        QCOMPARE(src->temporary[0].entry.spec, QStringLiteral("UUID=0000000000000003"));
+        QCOMPARE(src->temporary[0].entry.options, QStringList({QStringLiteral("uid=1000"), QStringLiteral("gid=1000")}));
+
+        MainWindow w2(new FixtureSource(false));
+        w2.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w2));
+        selectTile(w2, QStringLiteral("2.0 TB NTFS partition"));
+        QVERIFY(!w2.actionCollection()->action(QStringLiteral("mount_at"))->isVisible());
+    }
+
+    void testMountAfterApply()
+    {
+        auto *src = new FixtureSource(true);
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        // A new entry mounted when opened: test-mounted, then unmounted again.
+        selectTile(w, QStringLiteral("2.0 TB NTFS partition"));
+        EntryEditor *e = openEditor(w, [&w] { w.editSelected(); });
+        e->findChild<QRadioButton *>(QStringLiteral("access.start.2"))->click();
+        e->accept();
+        QCoreApplication::processEvents();
+        // A drive that isn't connected: not tested.
+        e = openEditor(w, [&w] { w.newEntry(); });
+        typeInto(e->findChild<QLineEdit *>(QStringLiteral("editor.spec")), QStringLiteral("UUID=feed-beef"));
+        typeInto(e->findChild<QLineEdit *>(QStringLiteral("editor.mountPoint")), QStringLiteral("/mnt/away"));
+        e->accept();
+        QCoreApplication::processEvents();
+        QSignalSpy tested(&w, &MainWindow::testMountFinished);
+        w.applyChanges();
+        QCOMPARE(tested.count(), 1);
+        QCOMPARE(tested.at(0).at(0).toInt(), 0);
+        QCOMPARE(src->calls, QStringList({QStringLiteral("mount:/mnt/nvme0n1p3"), QStringLiteral("unmount:/mnt/nvme0n1p3")}));
+
+        // A failing test mount offers Undo, which restores the backup just made.
+        src->calls.clear();
+        const QByteArray before = src->onDisk();
+        selectTile(w, QStringLiteral("Windows recovery partition"));
+        e = openEditor(w, [&w] { w.editSelected(); });
+        src->failMount.append(e->entry().mountPoint);
+        e->accept();
+        QCoreApplication::processEvents();
+        bool undone = false;
+        clickInNextDialog(QStringLiteral("Undo Changes"), &undone);
+        w.applyChanges();
+        QVERIFY(undone);
+        QCOMPARE(tested.count(), 2);
+        QCOMPARE(tested.at(1).at(0).toInt(), 1);
+        QCOMPARE(src->restores.size(), 1);
+        QCOMPARE(src->onDisk(), before);
+    }
+
+    void changedMountedEntryOffersRemount()
+    {
+        auto *src = new FixtureSource(true, "UUID=0000000000000003 /mnt/win ntfs3 nofail 0 0\n");
+        src->setMounted(QStringLiteral("/mnt/win"), true);
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectTile(w, QStringLiteral("win"));
+        EntryEditor *e = openEditor(w, [&w] { w.editSelected(); });
+        advancedRow(e, QStringLiteral("noatime"))->setCheckState(0, Qt::Checked);
+        e->accept();
+        QCoreApplication::processEvents();
+        w.applyChanges();
+        auto *bar = w.findChild<KMessageWidget *>(QStringLiteral("remountBar"));
+        QVERIFY(bar->isVisibleTo(&w));
+        QVERIFY(src->calls.isEmpty()); // mounted entries aren't touched
+        screenshot(w, QStringLiteral("remount-bar"));
+        bar->actions().first()->trigger();
+        QCOMPARE(src->calls, QStringList({QStringLiteral("unmount:/mnt/win"), QStringLiteral("mount:/mnt/win")}));
+        QVERIFY(!bar->isVisibleTo(&w));
     }
 };
 
