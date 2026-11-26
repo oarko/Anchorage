@@ -188,8 +188,67 @@ def main():
     slow = ssh("systemd-analyze blame 2>/dev/null | head -3").stdout
     check("start-up didn't wait for the missing drive (no 90 s timeout)", not re.search(r"^\s*1min|^\s*[3-9]\d(\.\d+)?s ", slow, re.M), slow)
 
-    # ---- remove and restore ---------------------------------------------------------
+    # ---- mounting and unmounting through the helper (SPEC §6.1) ----------------------
     con = Console()
+    con.login("dana")
+    res, prompts = con.run("unmount /mnt/e2e-boot", "dana", PASSWORDS["dana"])
+    check("dana unmounts the start-up drive with her own password", res.startswith("RESULT ok") and fs_at("/mnt/e2e-boot") == ""
+          and prompts == ["password"], f"{res} {prompts}")
+    res, _ = con.run("mount-entry /mnt/e2e-boot", "dana", PASSWORDS["dana"])
+    check("... and mounts it again from fstab", res.startswith("RESULT ok") and fs_at("/mnt/e2e-boot") == "ext4", res)
+
+    # In use: a program sitting in the folder is named; nothing is unmounted.
+    ssh("sudo -u nora sh -c 'cd /mnt/e2e-boot && exec sleep 300' >/dev/null 2>&1 &")
+    time.sleep(1)
+    res, _ = con.run("unmount /mnt/e2e-boot", "dana", PASSWORDS["dana"])
+    check("unmounting a drive in use names the program and leaves it mounted",
+          res.startswith("RESULT error") and "sleep" in res and fs_at("/mnt/e2e-boot") == "ext4", res)
+    ssh("sudo pkill -u nora -x sleep")
+    time.sleep(1)
+    res, _ = con.run("unmount /mnt/e2e-boot", "dana", PASSWORDS["dana"])
+    check("... and works once the program has gone", res.startswith("RESULT ok") and fs_at("/mnt/e2e-boot") == "", res)
+
+    # "Mounted when the folder is opened": systemd stays in charge.
+    ssh("ls /mnt/e2e-auto >/dev/null")
+    res, _ = con.run("unmount /mnt/e2e-auto", "dana", PASSWORDS["dana"])
+    check("unmounting an automount drive leaves systemd watching the folder", res.startswith("RESULT ok") and fs_at("/mnt/e2e-auto") == "autofs", res)
+    res, _ = con.run("mount-entry /mnt/e2e-auto", "dana", PASSWORDS["dana"])
+    check("... and mount-entry starts it through systemd",
+          res.startswith("RESULT ok") and "ext4" in ssh("findmnt -n -o FSTYPE --mountpoint /mnt/e2e-auto").stdout, res)
+    res, _ = con.run("mount-entry /mnt/e2e-missing", "dana", PASSWORDS["dana"])
+    check("mounting a 'start even if missing' drive that isn't there is reported, not 'done'",
+          res.startswith("RESULT error") and "isn't connected" in res, res)
+
+    # Temporary mount: not in fstab, gone after unmount.
+    before_fstab = vm_fstab()
+    res, _ = con.run(f"mount-temp UUID={uuids['E2EFAT']} /mnt/e2e-temp vfat ro,uid={alice_uid}", "dana", PASSWORDS["dana"])
+    owner = ssh("stat -c %U /mnt/e2e-temp").stdout.strip()
+    check("dana mounts the FAT drive at a chosen folder (read-only, owned by alice); fstab unchanged",
+          res.startswith("RESULT ok") and fs_at("/mnt/e2e-temp") == "vfat" and owner == "alice" and vm_fstab() == before_fstab, f"{res} {owner}")
+    res, _ = con.run("unmount /mnt/e2e-temp", "dana", PASSWORDS["dana"])
+    check("... and unmounts it", res.startswith("RESULT ok") and fs_at("/mnt/e2e-temp") == "", res)
+    res, _ = con.run(f"mount-temp UUID={uuids['E2EFAT']} /mnt/e2e-temp vfat bind", "dana", PASSWORDS["dana"])
+    check("options that bypass the rules are refused (bind)", res.startswith("RESULT error") and fs_at("/mnt/e2e-temp") == "", res)
+
+    # System entries: only with the typed confirmation.
+    res, _ = con.run("unmount /boot/efi", "dana", PASSWORDS["dana"])
+    check("unmounting /boot/efi without confirmation is refused", res.startswith("RESULT error") and fs_at("/boot/efi") == "vfat", res)
+    res, _ = con.run("unmount /boot/efi --confirm", "dana", PASSWORDS["dana"])
+    check("... and allowed with it", res.startswith("RESULT ok") and fs_at("/boot/efi") == "", res)
+    res, _ = con.run("mount-entry /boot/efi", "dana", PASSWORDS["dana"])
+    check("dana mounts /boot/efi again", res.startswith("RESULT ok") and fs_at("/boot/efi") == "vfat", res)
+    con.logout()
+
+    con.login("alice")
+    res, prompts = con.run("mount-entry /mnt/e2e-boot", "sam", PASSWORDS["sam"])
+    check("alice mounts a non-system entry with sam's password", res.startswith("RESULT ok") and fs_at("/mnt/e2e-boot") == "ext4", f"{res} {prompts}")
+    res, _ = con.run(f"mount-temp UUID={uuids['E2EFAT']} /mnt/e2e-temp vfat", "sam", PASSWORDS["sam"])
+    check("alice can't mount at a chosen folder, even with sam's password", res.startswith("RESULT error") and fs_at("/mnt/e2e-temp") == "", res)
+    res, _ = con.run("unmount /boot/efi --confirm", "sam", PASSWORDS["sam"])
+    check("alice can't unmount a system entry, even with sam's password", res.startswith("RESULT error") and fs_at("/boot/efi") == "vfat", res)
+    con.logout()
+
+    # ---- remove and restore ---------------------------------------------------------
     con.login("dana")
     before = vm_fstab()
     res, _ = con.run("edit-remove /mnt/e2e-missing", "dana", PASSWORDS["dana"])

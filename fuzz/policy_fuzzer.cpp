@@ -3,6 +3,7 @@
 // Input layout: [flags byte][current fstab] '\0' [proposed fstab]
 // The fuzzer checks that no input lets a caller do more than their tier allows.
 #include "mountpolicy.h"
+#include "mountplan.h"
 #include "requests.h"
 
 #include <cstdint>
@@ -118,6 +119,43 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
                 fail();
             }
         }
+        // Mounting (SPEC §6.1). `current` doubles as the mount table (mountinfo format).
+        const QList<mounts::Mount> now = mounts::parseMountInfo(current);
+        const auto temp = mounting::planTemporaryMount(requested, caller, confirm, current, now);
+        if (temp.ok()) {
+            if (!caller.fullAccess() || fstab::hasErrors(fstab::validate(requested)) || requested.spec.startsWith(QLatin1Char('-'))) {
+                fail();
+            }
+            for (const QString &o : requested.options) {
+                const QString name = o.section(QLatin1Char('='), 0, 0);
+                if (name == QLatin1String("bind") || name == QLatin1String("rbind") || name == QLatin1String("helper") || name.startsWith(QLatin1String("X-mount."))) {
+                    fail();
+                }
+            }
+            const Zone z = classifyMountPoint(requested.mountPoint).zone;
+            if (z == Zone::Invalid || (z == Zone::Blocked && !(caller.sudo && confirm))) {
+                fail();
+            }
+        }
+        const auto un = mounting::planUnmount(proposed, now, requested.mountPoint, caller, confirm);
+        if (un.ok()) {
+            if ((un.system && !(caller.fullAccess() && confirm)) || !mounting::mountedAt(now, requested.mountPoint)) {
+                fail();
+            }
+            const auto *m = mounting::mountedAt(now, requested.mountPoint);
+            const bool inFstab = file.findMountPoint(requested.mountPoint) >= 0;
+            if (!inFstab && !caller.fullAccess()) {
+                fail();
+            }
+            if (!inFstab && m->fsType == QLatin1String("proc")) {
+                fail();
+            }
+        }
+        const auto me = mounting::planMountEntry(proposed, requested.mountPoint, caller, now);
+        if (me.ok() && (me.entry.type == QLatin1String("swap") || mounting::mountedAt(now, requested.mountPoint))) {
+            fail(); // swap is never mounted; nothing is mounted twice
+        }
+
         // Requests survive encoding/decoding unchanged (the decoder refuses over 64 options).
         const auto decoded = requests::decodeEntry(requests::encodeEntry(requested));
         if (requested.options.size() <= 64 ? (!decoded || *decoded != requested) : decoded.ok()) {

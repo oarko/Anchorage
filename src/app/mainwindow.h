@@ -51,6 +51,10 @@ public:
     void setSystemEditing(bool on);
     void restoreBackup(const QString &name);
     void showSettings();
+    void mountSelected();
+    void unmountSelected();
+    void mountAtSelected();
+    void remountChanged();
 
 Q_SIGNALS:
     // An editor dialog was created (tests use this to drive it).
@@ -59,6 +63,10 @@ Q_SIGNALS:
     void restoreFinished(bool ok);
     void settingsFinished(bool ok);
     void settingsOpened(QDialog *dialog);
+    void mountAtOpened(QDialog *dialog);
+    void mountFinished(bool ok);
+    // After Apply: how many test mounts failed (-1: none were needed).
+    void testMountFinished(int failures);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -83,6 +91,17 @@ private:
     bool checkWrite(const QByteArray &proposed, bool *confirm, anchorage::policy::Plan *plan);
     void showHelperError(const anchorage::client::Reply &reply, const QString &what);
 
+    enum class Route { None, AsUser, Helper };
+    struct MountChoices {
+        Route mount = Route::None;
+        Route unmount = Route::None;
+        bool mountAt = false;
+        QString hint;
+    };
+    MountChoices mountChoices(const anchorage::inventory::Item &item) const;
+    void runUnmount(const anchorage::inventory::Item &item, Route route, bool confirmSystem);
+    void testMount(const QList<anchorage::fstab::Entry> &entries, const QString &backup);
+
     DataSource *m_source;
     Snapshot m_snapshot;
     std::optional<QByteArray> m_pending; // proposed /etc/fstab
@@ -101,6 +120,8 @@ private:
     KMessageWidget *m_banner;
     KMessageWidget *m_systemBanner;
     KMessageWidget *m_applyBar;
+    KMessageWidget *m_remountBar;
+    QStringList m_toRemount; // changed entries that were mounted while saving
     QLabel *m_breadcrumb;
     QLineEdit *m_search;
     QLabel *m_statusLeft;
@@ -113,5 +134,8 @@ private:
     QAction *m_applyAction = nullptr;
     QAction *m_discardAction = nullptr;
     QAction *m_previewAction = nullptr;
+    QAction *m_mountAction = nullptr;
+    QAction *m_unmountAction = nullptr;
+    QAction *m_mountAtAction = nullptr;
     KToggleAction *m_systemAction = nullptr;
 };

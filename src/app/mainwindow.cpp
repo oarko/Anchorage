@@ -11,6 +11,10 @@
 #include "mountpolicy.h"
 #include "placespanel.h"
 #include "settingsdialog.h"
+#include "mountatdialog.h"
+#include "mountplan.h"
+#include "access.h"
+#include "options.h"
 #include "tiledelegate.h"
 
 #include <KActionCollection>
@@ -81,6 +85,12 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
     m_systemBanner->hide();
     outer->addWidget(m_applyBar);
     outer->addWidget(m_systemBanner);
+    m_remountBar = new KMessageWidget(central);
+    m_remountBar->setObjectName(QStringLiteral("remountBar"));
+    m_remountBar->setMessageType(KMessageWidget::Information);
+    m_remountBar->setWordWrap(true);
+    m_remountBar->hide();
+    outer->addWidget(m_remountBar);
 
     auto *split = new QSplitter(Qt::Horizontal, central);
     m_places = new PlacesPanel(split);
@@ -163,8 +173,6 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
         }
     });
     connect(m_backups, &BackupsPage::restoreRequested, this, &MainWindow::restoreBackup);
-    connect(m_info, &InfoPanel::editRequested, this, &MainWindow::editSelected);
-    connect(m_info, &InfoPanel::removeRequested, this, &MainWindow::removeSelected);
     connect(m_source, &DataSource::changed, this, &MainWindow::reload);
 
     setupActions();
@@ -207,6 +215,20 @@ void MainWindow::setupActions()
     m_previewAction = ac->addAction(QStringLiteral("changes_preview"), this, &MainWindow::previewChanges);
     m_previewAction->setText(i18n("Preview…"));
     m_previewAction->setIcon(QIcon::fromTheme(QStringLiteral("document-preview")));
+
+    m_mountAction = ac->addAction(QStringLiteral("mount"), this, &MainWindow::mountSelected);
+    m_mountAction->setText(i18n("Mount"));
+    m_mountAction->setIcon(QIcon::fromTheme(QStringLiteral("media-mount")));
+    m_unmountAction = ac->addAction(QStringLiteral("unmount"), this, &MainWindow::unmountSelected);
+    m_unmountAction->setText(i18n("Unmount"));
+    m_unmountAction->setIcon(QIcon::fromTheme(QStringLiteral("media-eject")));
+    m_mountAtAction = ac->addAction(QStringLiteral("mount_at"), this, &MainWindow::mountAtSelected);
+    m_mountAtAction->setText(i18n("Mount At…"));
+    m_mountAtAction->setIcon(QIcon::fromTheme(QStringLiteral("media-mount")));
+    auto *remount = new QAction(QIcon::fromTheme(QStringLiteral("view-refresh")), i18n("Remount"), this);
+    remount->setObjectName(QStringLiteral("remount"));
+    connect(remount, &QAction::triggered, this, &MainWindow::remountChanged);
+    m_remountBar->addAction(remount);
 
     m_systemAction = new KToggleAction(QIcon::fromTheme(QStringLiteral("object-unlocked")), i18n("Allow Editing System Entries"), this);
     ac->addAction(QStringLiteral("allow_system_editing"), m_systemAction);
@@ -340,6 +362,13 @@ void MainWindow::updateActions()
     m_applyAction->setEnabled(pending && !m_applying && m_snapshot.fstab == m_baseline);
     m_discardAction->setEnabled(pending && !m_applying);
     m_previewAction->setEnabled(pending);
+    const MountChoices mc = it ? mountChoices(*it) : MountChoices{};
+    m_mountAction->setEnabled(mc.mount != Route::None && !m_applying);
+    m_mountAction->setVisible(!it || mc.mount != Route::None || (it->entry && !it->mounted));
+    m_unmountAction->setEnabled(mc.unmount != Route::None && !m_applying);
+    m_unmountAction->setVisible(!it || it->mounted);
+    m_mountAtAction->setEnabled(mc.mountAt && !m_applying);
+    m_mountAtAction->setVisible(!it || mc.mountAt);
     m_backups->setRestoreEnabled(!m_applying && m_snapshot.fstabError.isEmpty(),
                                  m_applying ? i18n("Wait until saving has finished.") : QString());
 }
@@ -375,9 +404,11 @@ void MainWindow::updateSelection()
         m_selectedId = it->id;
         m_info->showItem(*it);
         QString why;
-        const bool editable = canEdit(*it, &why);
-        m_info->setActions(editable ? (it->entry ? i18n("Edit…") : i18n("Add to fstab…")) : QString(), editable && it->entry, why);
+        canEdit(*it, &why);
         updateActions();
+        const MountChoices mc = mountChoices(*it);
+        const QString hint = mc.hint.isEmpty() ? why : mc.hint;
+        m_info->setActions({m_mountAction, m_unmountAction, m_mountAtAction, m_editAction, m_removeAction}, hint);
         return;
     }
     m_selectedId.clear();
@@ -621,7 +652,8 @@ void MainWindow::applyChanges()
     updateActions();
     statusBar()->showMessage(i18n("Saving /etc/fstab…"));
     requests::WriteFstab request{service::fingerprint(m_baseline), proposed, confirm, true};
-    m_source->writeFstab(request, this, [this, proposed](const client::Reply &reply) {
+    const QList<fstab::Entry> changedEntries = plan.added;
+    m_source->writeFstab(request, this, [this, proposed, changedEntries](const client::Reply &reply) {
         m_applying = false;
         switch (reply.status) {
         case client::Reply::Status::Ok: {
@@ -631,6 +663,7 @@ void MainWindow::applyChanges()
             const QString backup = reply.data.value(QStringLiteral("backup")).toString();
             statusBar()->showMessage(backup.isEmpty() ? i18n("Saved /etc/fstab.") : i18n("Saved /etc/fstab. The previous version is in Backups (%1).", backup), 15000);
             reload();
+            testMount(changedEntries, backup);
             break;
         }
         default:
@@ -765,6 +798,290 @@ void MainWindow::showSettings()
     dlg->open();
 }
 
+MainWindow::MountChoices MainWindow::mountChoices(const inventory::Item &item) const
+{
+    MountChoices c;
+    if (item.kind == inventory::Kind::Swap || !m_snapshot.fstabError.isEmpty()) {
+        return c;
+    }
+    const bool full = m_snapshot.me.fullAccess();
+    if (item.mounted) {
+        if (item.entry && item.userMountable) {
+            c.unmount = Route::AsUser;
+        } else if (!item.entry || item.system) {
+            c.unmount = full ? Route::Helper : Route::None;
+        } else {
+            c.unmount = Route::Helper;
+        }
+        return c;
+    }
+    if (!item.entry) {
+        c.mountAt = full && (item.volume || item.kind == inventory::Kind::Network);
+        return c;
+    }
+    // Mounting reads /etc/fstab on disk, so the entry must be saved as shown.
+    const fstab::File disk = fstab::File::parse(m_snapshot.fstab);
+    const int line = disk.findMountPoint(item.entry->mountPoint);
+    const auto &onDisk = line >= 0 ? disk.lines().at(static_cast<std::size_t>(line)).entry : std::nullopt;
+    if (!onDisk || *onDisk != *item.entry) {
+        c.hint = i18n("Apply your changes first to mount it.");
+        return c;
+    }
+    if (item.userMountable) {
+        c.mount = Route::AsUser;
+    } else {
+        c.mount = (item.system && !full) ? Route::None : Route::Helper;
+    }
+    return c;
+}
+
+void MainWindow::mountSelected()
+{
+    const auto *it = selectedItem();
+    if (!it || !it->entry || m_applying) {
+        return;
+    }
+    const inventory::Item item = *it;
+    const MountChoices mc = mountChoices(item);
+    const QString mp = item.entry->mountPoint;
+    const auto done = [this, mp](const client::Reply &reply) {
+        if (reply.ok()) {
+            statusBar()->showMessage(i18n("Mounted %1.", mp), 8000);
+            reload();
+        } else {
+            showHelperError(reply, i18n("%1 was not mounted.", mp));
+        }
+        Q_EMIT mountFinished(reply.ok());
+    };
+    statusBar()->showMessage(i18n("Mounting %1…", mp));
+    if (mc.mount == Route::AsUser) {
+        m_source->userMount(mp, true, done);
+    } else if (mc.mount == Route::Helper) {
+        m_source->mountEntry(mp, this, done);
+    }
+}
+
+void MainWindow::unmountSelected()
+{
+    const auto *it = selectedItem();
+    if (!it || !it->mounted || m_applying) {
+        return;
+    }
+    const inventory::Item item = *it;
+    const MountChoices mc = mountChoices(item);
+    if (mc.unmount == Route::None) {
+        return;
+    }
+    bool confirm = false;
+    if (item.system) {
+        ProtectedConfirmDialog dlg({item.mountedAt}, i18n("Unmount a System Entry?"),
+                                   i18n("%1 is needed by the running system. Unmounting it can close programs, lose unsaved work or stop the "
+                                        "computer from working until it restarts.",
+                                        item.mountedAt),
+                                   i18n("Unmount"), this);
+        if (dlg.exec() != QDialog::Accepted) {
+            return;
+        }
+        confirm = true;
+    }
+    runUnmount(item, mc.unmount, confirm);
+}
+
+void MainWindow::runUnmount(const inventory::Item &item, Route route, bool confirmSystem)
+{
+    const QString target = item.mountedAt;
+    const auto done = [this, item, route, confirmSystem, target](const client::Reply &reply) {
+        if (reply.ok()) {
+            statusBar()->showMessage(i18n("Unmounted %1.", target), 8000);
+            reload();
+            Q_EMIT mountFinished(true);
+            return;
+        }
+        const QStringList programs = reply.data.value(QStringLiteral("processes")).toStringList();
+        const bool busy = !programs.isEmpty() || reply.data.value(QStringLiteral("busy")).toBool() || reply.message.contains(QLatin1String("in use"));
+        if (busy && reply.status == client::Reply::Status::Failed) {
+            statusBar()->clearMessage();
+            const QString text = programs.isEmpty()
+                ? i18n("%1 is in use. Close the files and folders on it (and terminals open there), then try again.", target)
+                : i18n("%1 is in use by: <b>%2</b>.<br><br>Close them, or leave the folder in them, then try again.", target,
+                       programs.join(QStringLiteral(", ")).toHtmlEscaped());
+            if (KMessageBox::warningTwoActions(this, text, i18n("Drive in Use"), KGuiItem(i18n("Try Again"), QStringLiteral("view-refresh")),
+                                               KStandardGuiItem::cancel())
+                == KMessageBox::PrimaryAction) {
+                runUnmount(item, route, confirmSystem);
+                return;
+            }
+        } else {
+            showHelperError(reply, i18n("%1 was not unmounted.", target));
+        }
+        Q_EMIT mountFinished(false);
+    };
+    statusBar()->showMessage(i18n("Unmounting %1…", target));
+    if (route == Route::AsUser) {
+        m_source->userMount(target, false, done);
+    } else {
+        m_source->unmount({target, confirmSystem}, this, done);
+    }
+}
+
+void MainWindow::mountAtSelected()
+{
+    const auto *it = selectedItem();
+    if (!it || m_applying || !mountChoices(*it).mountAt) {
+        return;
+    }
+    fstab::Entry e;
+    if (it->volume) {
+        e.spec = EntryEditor::specFor(*it->volume, EntryEditor::IdentifyBy::Uuid);
+        e.type = it->volume->fsType == QLatin1String("ntfs") ? m_snapshot.settings.ntfsDriver : it->volume->fsType;
+        if (e.type == QLatin1String("ntfs") && m_snapshot.settings.ntfsDriver == QLatin1String("ntfs3")) {
+            e.type = QStringLiteral("ntfs3");
+        }
+        e.mountPoint = MountAtDialog::suggestedFolder(*it->volume);
+    } else {
+        e.spec = it->source;
+        e.type = it->fsType;
+        e.mountPoint = QStringLiteral("/mnt/") + it->title;
+    }
+    auto *dlg = new MountAtDialog(e, it->title, m_snapshot, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QDialog::accepted, this, [this, dlg] {
+        const fstab::Entry wanted = dlg->entry();
+        bool confirm = false;
+        if (policy::classifyMountPoint(wanted.mountPoint).zone == policy::Zone::Blocked) {
+            ProtectedConfirmDialog confirmDlg({wanted.mountPoint}, this);
+            if (confirmDlg.exec() != QDialog::Accepted) {
+                return;
+            }
+            confirm = true;
+        }
+        statusBar()->showMessage(i18n("Mounting at %1…", wanted.mountPoint));
+        m_source->mountTemporary({wanted, confirm}, this, [this, wanted](const client::Reply &reply) {
+            if (reply.ok()) {
+                statusBar()->showMessage(i18n("Mounted at %1 until it is unmounted or the computer restarts.", wanted.mountPoint), 10000);
+                reload();
+            } else {
+                showHelperError(reply, i18n("Nothing was mounted at %1.", wanted.mountPoint));
+            }
+            Q_EMIT mountFinished(reply.ok());
+        });
+    });
+    Q_EMIT mountAtOpened(dlg);
+    dlg->open();
+}
+
+void MainWindow::testMount(const QList<fstab::Entry> &entries, const QString &backup)
+{
+    // SPEC §9 / §6.1: mount each new or changed entry once to prove it works.
+    QList<fstab::Entry> toTest;
+    QStringList remount;
+    for (const fstab::Entry &e : entries) {
+        if (e.type == QLatin1String("swap")) {
+            continue;
+        }
+        if (mounting::mountedAt(m_snapshot.mounts, e.mountPoint)) {
+            remount.append(e.mountPoint);
+            continue;
+        }
+        const bool network = options::Catalogue::builtIn().family(e.type) == options::Family::Network;
+        const bool namesDevice = e.spec.startsWith(QLatin1String("UUID=")) || e.spec.startsWith(QLatin1String("LABEL="))
+            || e.spec.startsWith(QLatin1String("PARTUUID=")) || e.spec.startsWith(QLatin1String("PARTLABEL=")) || e.spec.startsWith(QLatin1String("/dev/"));
+        const bool present = std::any_of(m_snapshot.volumes.cbegin(), m_snapshot.volumes.cend(), [&e](const drives::Volume &v) {
+            return inventory::specMatches(e.spec, v);
+        });
+        if (!network && namesDevice && !present) {
+            continue; // not connected: nothing to test
+        }
+        toTest.append(e);
+    }
+    m_toRemount = remount;
+    if (!remount.isEmpty()) {
+        m_remountBar->setText(i18np("The new options for %2 take effect after it is remounted.", "The new options for %2 take effect after they are remounted.",
+                                    int(remount.size()), remount.join(QStringLiteral(", "))));
+        m_remountBar->show();
+    }
+    if (toTest.isEmpty()) {
+        Q_EMIT testMountFinished(-1);
+        return;
+    }
+
+    struct State {
+        QList<fstab::Entry> left;
+        QStringList failures;
+    };
+    auto state = std::make_shared<State>(State{toTest, {}});
+    auto step = std::make_shared<std::function<void()>>();
+    *step = [this, state, step, backup] {
+        if (state->left.isEmpty()) {
+            reload();
+            const int failures = int(state->failures.size());
+            if (failures > 0) {
+                const auto answer = KMessageBox::warningTwoActionsList(
+                    this, i18n("The changes were saved, but the test mount failed. Undo restores /etc/fstab as it was before."), state->failures,
+                    i18n("Test Mount Failed"), KGuiItem(i18n("Undo Changes"), QStringLiteral("edit-undo")), KGuiItem(i18n("Keep Changes")));
+                if (answer == KMessageBox::PrimaryAction && !backup.isEmpty()) {
+                    m_source->restoreBackup({backup, false}, this, [this](const client::Reply &reply) {
+                        if (reply.ok()) {
+                            statusBar()->showMessage(i18n("The previous /etc/fstab was restored."), 10000);
+                            reload();
+                        } else {
+                            showHelperError(reply, i18n("/etc/fstab was not restored."));
+                        }
+                    });
+                }
+            } else {
+                statusBar()->showMessage(i18n("Saved, and the test mount worked."), 10000);
+            }
+            Q_EMIT testMountFinished(failures);
+            *step = nullptr; // break the cycle
+            return;
+        }
+        const fstab::Entry e = state->left.takeFirst();
+        statusBar()->showMessage(i18n("Test mounting %1…", e.mountPoint));
+        m_source->mountEntry(e.mountPoint, this, [this, state, step, e](const client::Reply &reply) {
+            if (!reply.ok()) {
+                state->failures.append(QStringLiteral("%1: %2").arg(e.mountPoint, reply.message));
+                (*step)();
+                return;
+            }
+            if (access::read(e.options, e.type).start == access::Start::AtBoot) {
+                (*step)(); // it mounts at start-up anyway: leave it mounted
+                return;
+            }
+            m_source->unmount({e.mountPoint, false}, this, [state, step, e](const client::Reply &r) {
+                if (!r.ok()) {
+                    state->failures.append(QStringLiteral("%1 (unmounting after the test): %2").arg(e.mountPoint, r.message));
+                }
+                (*step)();
+            });
+        });
+    };
+    (*step)();
+}
+
+void MainWindow::remountChanged()
+{
+    m_remountBar->hide();
+    const QStringList targets = m_toRemount;
+    m_toRemount.clear();
+    for (const QString &mp : targets) {
+        m_source->unmount({mp, false}, this, [this, mp](const client::Reply &reply) {
+            if (!reply.ok()) {
+                showHelperError(reply, i18n("%1 was not remounted.", mp));
+                return;
+            }
+            m_source->mountEntry(mp, this, [this, mp](const client::Reply &r) {
+                if (r.ok()) {
+                    statusBar()->showMessage(i18n("Remounted %1 with the new options.", mp), 8000);
+                    reload();
+                } else {
+                    showHelperError(r, i18n("%1 was unmounted but could not be mounted again.", mp));
+                }
+            });
+        });
+    }
+}
+
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     if (m_pending && !m_applying) {
@@ -807,6 +1124,12 @@ void MainWindow::showContextMenu(const QPoint &pos)
     }
     menu.addSeparator();
     updateActions();
+    for (QAction *a : {m_mountAction, m_unmountAction, m_mountAtAction}) {
+        if (a->isVisible()) {
+            menu.addAction(a);
+        }
+    }
+    menu.addSeparator();
     menu.addAction(m_editAction);
     menu.addAction(m_removeAction);
     menu.exec(m_tiles->viewport()->mapToGlobal(pos));

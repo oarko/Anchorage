@@ -9,6 +9,7 @@
 
 class QFormLayout;
 class QLabel;
+class QAction;
 class QPushButton;
 
 // Right-hand panel: details of the selected tile (layout C, SPEC §15).
@@ -22,12 +23,8 @@ public:
     void showItem(const std::optional<anchorage::inventory::Item> &item);
     void showSummary(int total, int mounted, const QString &viewName);
     void showMessage(const QString &title, const QString &text, const QString &iconName);
-    // Administrator actions for the shown item (hidden when `editText` is empty).
-    void setActions(const QString &editText, bool canRemove, const QString &hint);
-
-Q_SIGNALS:
-    void editRequested();
-    void removeRequested();
+    // Buttons for the shown item: one per visible action (named "info.<action name>").
+    void setActions(const QList<QAction *> &actions, const QString &hint);
 
 private:
     void addRow(const QString &label, const QString &value, bool mono = false);
@@ -42,8 +39,7 @@ private:
     QPushButton *m_open;
     QPushButton *m_copy;
     QWidget *m_adminBox;
-    QPushButton *m_edit;
-    QPushButton *m_remove;
+    QList<QPushButton *> m_actionButtons;
     QLabel *m_note;
     std::optional<anchorage::inventory::Item> m_item;
 };

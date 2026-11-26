@@ -21,6 +21,7 @@ const QString kPass = QStringLiteral("pass");
 const QString kBackup = QStringLiteral("backup");
 const QString kKeepBackups = QStringLiteral("keepBackups");
 const QString kNtfsDriver = QStringLiteral("ntfsDriver");
+const QString kConfirmSystem = QStringLiteral("confirmSystem");
 
 // Every key present, nothing else.
 QString checkKeys(const QVariantMap &args, const QStringList &required, const QStringList &optional = {})
@@ -132,6 +133,50 @@ Result<settings::Settings> decodeSettings(const QVariantMap &args)
         return R::failure(errors.join(QLatin1Char(' ')));
     }
     return s;
+}
+
+Result<TemporaryMount> decodeTemporaryMount(const QVariantMap &args)
+{
+    using R = Result<TemporaryMount>;
+    if (const QString e = checkKeys(args, {kSpec, kMountPoint, kType, kOptions, kConfirm}); !e.isEmpty()) {
+        return R::failure(e);
+    }
+    if (!is(args[kSpec], QMetaType::QString) || !is(args[kMountPoint], QMetaType::QString) || !is(args[kType], QMetaType::QString)
+        || !is(args[kOptions], QMetaType::QStringList) || !is(args[kConfirm], QMetaType::Bool)) {
+        return R::failure(QStringLiteral("Request fields have the wrong type."));
+    }
+    TemporaryMount t;
+    t.entry.spec = args[kSpec].toString();
+    t.entry.mountPoint = args[kMountPoint].toString();
+    t.entry.type = args[kType].toString();
+    t.entry.options = args[kOptions].toStringList();
+    t.confirmProtected = args[kConfirm].toBool();
+    if (t.entry.options.size() > 64) {
+        return R::failure(QStringLiteral("Too many options."));
+    }
+    return t;
+}
+
+Result<Unmount> decodeUnmount(const QVariantMap &args)
+{
+    using R = Result<Unmount>;
+    if (const QString e = checkKeys(args, {kMountPoint, kConfirmSystem}); !e.isEmpty()) {
+        return R::failure(e);
+    }
+    if (!is(args[kMountPoint], QMetaType::QString) || !is(args[kConfirmSystem], QMetaType::Bool)) {
+        return R::failure(QStringLiteral("Request fields have the wrong type."));
+    }
+    return Unmount{args[kMountPoint].toString(), args[kConfirmSystem].toBool()};
+}
+
+QVariantMap encodeTemporaryMount(const TemporaryMount &t)
+{
+    return {{kSpec, t.entry.spec}, {kMountPoint, t.entry.mountPoint}, {kType, t.entry.type}, {kOptions, t.entry.options}, {kConfirm, t.confirmProtected}};
+}
+
+QVariantMap encodeUnmount(const Unmount &u)
+{
+    return {{kMountPoint, u.mountPoint}, {kConfirmSystem, u.confirmSystem}};
 }
 
 QVariantMap encodeSettings(const settings::Settings &s)

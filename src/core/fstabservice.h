@@ -9,6 +9,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 // The privileged operations behind the helper's actions.
 //
 // Paths are parameters so tests can run against a temporary folder. The shipped helper
@@ -26,6 +28,8 @@ struct Paths {
     // system; tests point it at a temporary folder so /mnt/x becomes <tmp>/mnt/x.
     QString mountRoot;
     QString configName = QStringLiteral("config"); // settings file inside configDir
+    QString mountInfo = QStringLiteral("/proc/self/mountinfo"); // what is mounted now
+    QString procRoot = QStringLiteral("/proc"); // for finding programs using a drive
 };
 Paths systemPaths();
 
@@ -59,6 +63,31 @@ Outcome removeSharedMount(const Paths &paths, const Caller &caller, const QStrin
 settings::Settings readSettings(const Paths &paths);
 // Only driveadmins and administrators may change them (SPEC §4.2).
 Outcome writeSettings(const Paths &paths, const Caller &caller, const settings::Settings &settings);
+
+// ---- Mounting (SPEC §6.1) ------------------------------------------------------------
+
+// Runs one program (absolute path, argument list, never a shell). Tests pass a fake.
+struct CommandResult {
+    int exitCode = -1;
+    QString output; // stdout and stderr together
+};
+using Runner = std::function<CommandResult(const QString &program, const QStringList &args)>;
+Runner systemRunner(); // QProcess, 2 minute limit
+
+struct MountOutcome {
+    QStringList errors;
+    QStringList createdDirs;
+    QStringList processes; // when unmounting failed because the drive is in use
+    bool ok() const { return errors.isEmpty(); }
+};
+
+MountOutcome mountEntry(const Paths &paths, const Caller &caller, const QString &mountPoint, const Runner &run);
+MountOutcome mountTemporary(const Paths &paths, const Caller &caller, const fstab::Entry &entry, bool confirmProtected, const Runner &run);
+MountOutcome unmount(const Paths &paths, const Caller &caller, const QString &mountPoint, bool confirmSystem, const Runner &run);
+
+// Names of the programs with a file, folder or working directory on the file system
+// mounted at `path` (sorted, no duplicates). Reads `procRoot` (/proc).
+QStringList processesUsing(const QString &path, const QString &procRoot);
 
 // Backups: names look like fstab-2026-11-24T23-10-05Z (optionally with -N).
 bool isBackupName(const QString &name);

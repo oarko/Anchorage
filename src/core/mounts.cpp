@@ -38,9 +38,9 @@ QList<Mount> parseMountInfo(QByteArrayView data)
     return out;
 }
 
-Result<QList<Mount>> readCurrent()
+Result<QList<Mount>> readCurrent(const QString &path)
 {
-    QFile f(QStringLiteral("/proc/self/mountinfo"));
+    QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
         return Result<QList<Mount>>::failure(f.errorString());
     }

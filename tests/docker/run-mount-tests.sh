@@ -24,7 +24,7 @@ docker run --rm --privileged --network none \
     set -uo pipefail
     cleanup() {
       # Unmount and detach only what this test created.
-      for t in $(findmnt -rn -o TARGET | grep "^/mnt/anchorage-test/" | sort -r); do umount -l "$t" || true; done
+      for t in $(findmnt -rn -o TARGET | grep -E "^/mnt/anchorage-(test|svc)/" | sort -r); do umount -l "$t" || true; done
       for img in /tmp/anchorage-mounttest-*/*.img; do
         [ -e "$img" ] || continue
         for dev in $(losetup -n -O NAME -j "$img"); do losetup -d "$dev" || true; done

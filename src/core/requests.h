@@ -19,6 +19,16 @@ struct WriteFstab {
     bool createMountPoints = false;
 };
 
+struct TemporaryMount {
+    fstab::Entry entry; // dump and pass are ignored
+    bool confirmProtected = false;
+};
+
+struct Unmount {
+    QString mountPoint;
+    bool confirmSystem = false;
+};
+
 struct Restore {
     QString backupName;
     bool confirmProtected = false;
@@ -29,6 +39,9 @@ Result<fstab::Entry> decodeEntry(const QVariantMap &args); // addsharedmount
 Result<QString> decodeMountPoint(const QVariantMap &args); // removesharedmount
 Result<Restore> decodeRestore(const QVariantMap &args);
 Result<settings::Settings> decodeSettings(const QVariantMap &args); // writesettings
+Result<TemporaryMount> decodeTemporaryMount(const QVariantMap &args); // mounttemporary
+Result<Unmount> decodeUnmount(const QVariantMap &args); // unmount
+// mountentry uses decodeMountPoint.
 
 // Builders used by the GUI side (and tests), so both ends agree on the keys.
 QVariantMap encodeWriteFstab(const WriteFstab &request);
@@ -36,5 +49,7 @@ QVariantMap encodeEntry(const fstab::Entry &entry);
 QVariantMap encodeMountPoint(const QString &mountPoint);
 QVariantMap encodeRestore(const Restore &request);
 QVariantMap encodeSettings(const settings::Settings &settings);
+QVariantMap encodeTemporaryMount(const TemporaryMount &request);
+QVariantMap encodeUnmount(const Unmount &request);
 
 } // namespace anchorage::requests

@@ -135,7 +135,43 @@ Fixed paths (compile-time constants): `/etc/fstab`, `/etc/anchorage/` (lock file
 `/etc/anchorage/credentials/`.
 Polkit group rule installed to `/usr/share/polkit-1/rules.d/60-anchorage-groups.rules`.
 
-Not yet implemented: mount/unmount, login mounts (`mount.usershare`), credentials files,
+### 6.1 Mounting and unmounting (agreed 2026-11-26)
+
+| Action | Purpose | Who (checked by the helper) |
+|---|---|---|
+| `mountentry` | Mount an fstab entry, named by its mount point; options come only from `/etc/fstab` | Non-system entries: anyone who passes polkit. System entries: driveadmins/sudo |
+| `mounttemporary` | Mount a drive or share at a chosen folder **without** changing fstab (gone after a restart): device, mount point, type, options | driveadmins/sudo only; same mount-point zone rules as fstab (§7), typed confirmation for protected locations |
+| `unmount` | Unmount whatever is mounted at a folder | fstab entries: anyone who passes polkit. Not in fstab: driveadmins/sudo. System entries (`/`, `/home`, `/boot`…): driveadmins/sudo **after a typed confirmation** ("it is Linux; people like to break it from time to time") |
+
+Polkit defaults as for `writefstab`: admin password; driveadmins their own password.
+
+- **How** (hybrid): entries with `x-systemd.automount` ("mounted when the folder is opened")
+  use `systemctl start/stop <unit>.mount`, so systemd keeps watching the folder; the real
+  error is read from the journal. Everything else uses `/usr/bin/mount --fstab /etc/fstab
+  <mount point>`, `mount -t <type> -o <options> <device> <folder>` (temporary) and
+  `/usr/bin/umount`, whose own error messages are shown.
+- Temporary mounts refuse options that would go around the folder rules or run other
+  programs: `bind`, `rbind`, `move`, `remount`, `helper=`, `X-mount.*`.
+- Pseudo file systems (`/proc`, `/sys`, cgroups, …) are never unmounted; only fstab
+  entries, block devices, network shares and FUSE drives.
+- Missing mount-point folders are created with the same rules as when saving (§7).
+- **In use**: when unmounting fails because the drive is busy, the helper lists the names
+  of the programs using it (looked up as root in `/proc`), and the GUI offers Try Again. No
+  lazy unmount.
+- **Entries marked "any user"** (`user`/`users`): the GUI runs `/usr/bin/mount` and
+  `/usr/bin/umount` as the person, with no helper and no password; Linux enforces who may
+  unmount.
+- **Mount At…** (drives and shares not in fstab, driveadmins/sudo): the folder is
+  pre-filled with `/mnt/<label>` or `/mnt/<device name>` (e.g. `/mnt/sda2`), with a Browse
+  button (also in the entry editor).
+- **Test mount after Apply** (§9): each new or changed entry that isn't mounted right now
+  is mounted, then unmounted again unless it mounts at start-up. Failures show the error
+  and offer **Undo** (restore the backup just made). Entries mounted right now aren't
+  touched; the bar offers **Remount** to use the new options. Swap and drives that aren't
+  connected are not test-mounted.
+- Later version: mounting removable drives as the user through UDisks, like Dolphin.
+
+Not yet implemented: login mounts (`mount.usershare`), credentials files,
 drive polkit rules, settings, group membership (later milestones).
 
 ## 7. Mount-point zones
@@ -212,7 +248,7 @@ Implemented (2026-11-25) in `src/app/entryeditor.*`, `src/core/access.*`, `src/c
 |---|---|---|
 | Timestamped backup | **On** | Keep the last N (setting); "Restore backup" menu |
 | Validate before writing | **On** | Own checks + `findmnt --verify` (implemented: run in the GUI before the password prompt; missing folders the helper will create, and missing devices of `nofail`/`noauto` entries, are not reported) |
-| Test mount + undo offer | **On** | After saving: `daemon-reload`, mount the new/changed entries, offer to restore on failure. **Not yet implemented** (needs the helper's mount action) |
+| Test mount + undo offer | **On** | After saving: `daemon-reload`, mount the new/changed entries, offer to restore on failure (§6.1) |
 | Preview changes | **Off** | "Preview…" button always available; admin setting forces it on for everyone |
 
 Backups and restore (agreed 2026-11-25, implemented):
