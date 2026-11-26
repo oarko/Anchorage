@@ -104,6 +104,9 @@ private Q_SLOTS:
         QList<mounts::Mount> driveMounted = current;
         driveMounted.append(mnt("/dev/sdc1", "/mnt/data", "ext4"));
         QVERIFY(mounting::planMountEntry(withBind, QStringLiteral("/srv/data"), standard, driveMounted).ok());
+        const QByteArray hardDep = fstabData + "/mnt/data /srv/hard none bind,nofail,x-systemd.requires=/mnt/data 0 0\n";
+        QVERIFY(!mounting::planMountEntry(hardDep, QStringLiteral("/srv/hard"), standard, current).ok());
+        QVERIFY(mounting::planMountEntry(hardDep, QStringLiteral("/srv/hard"), standard, driveMounted).ok());
     }
 
     void temporaryMountRules_data()

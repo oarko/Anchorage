@@ -137,5 +137,6 @@ private:
     QAction *m_mountAction = nullptr;
     QAction *m_unmountAction = nullptr;
     QAction *m_mountAtAction = nullptr;
+    QAction *m_removeOrphansAction = nullptr;
     KToggleAction *m_systemAction = nullptr;
 };

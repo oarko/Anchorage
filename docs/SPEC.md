@@ -215,11 +215,22 @@ General rules for every zone:
   Ubuntu). Immutable distributions (`/mnt` -> `/var/mnt`) are out of scope for now.
 - **Also show it at… (bind mounts)**: extra locations in the drive's editor, each saved as
   its own entry, e.g. `/mnt/Lingames  /run/media/oarko/Lingames  none
-  bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames  0 0`. The `requires-mounts-for`
-  stops a missing drive's empty folder being shown instead. A bind may show a sub-folder
+  bind,nofail,x-systemd.requires=/mnt/Lingames,x-systemd.requires-mounts-for=/mnt/Lingames  0 0`.
+  `x-systemd.requires` (Requires= + After= on the drive's mount unit) makes systemd refuse
+  the bind when the drive isn't mounted **or has no fstab line at all**; `requires-mounts-for`
+  alone binds the empty folder from the system disk in that case (found in the VM,
+  2026-11-26). Binds written before this get the option when their drive is next edited.
+- **Orphaned binds** (a bind whose drive no entry mounts): the tile shows "Drive not in
+  fstab", the editor explains, Mount is unavailable, and a banner offers **Remove Them**. A bind may show a sub-folder
   ("Folder on the drive", empty = whole drive). Binds follow the drive's "when it mounts"
   choice. When a mounted drive is given a new mount point, the editor offers to keep it
   reachable at the old location too. Bind entries also appear as their own tiles.
+- **Removing a drive** also removes every bind that shows it (or a folder on it), after a
+  warning listing them (agreed 2026-11-26, implemented).
+- Planned (agreed 2026-11-26, not built yet): Mount/Unmount on a drive include its binds
+  (drive first / binds first); `mountentry` and `unmount` accept a list of mount points so
+  Remount asks for the password once; after Apply, new binds of a mounted drive are
+  mounted in the same request as the test mount.
 
 Implemented (2026-11-25) in `src/app/entryeditor.*`, `src/core/access.*`, `src/core/options.*`:
 - **Option catalogue**: `src/core/data/filesystems.json` (21 types) and `options.json` (~390

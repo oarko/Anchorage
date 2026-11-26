@@ -89,12 +89,20 @@ def unit_state(path):
 
 
 def reboot():
+    """Restarts the VM and returns once the NEW boot has finished starting up.
+
+    Waiting for SSH alone is not enough: while the old system is still shutting down
+    (slow with real drives attached, or an unreachable NFS share), SSH keeps answering
+    and checks would see mounts being taken down. So wait for a different boot ID, then
+    for systemd to finish starting (is-system-running --wait)."""
+    old = ssh("cat /proc/sys/kernel/random/boot_id").stdout.strip()
     ssh("sudo systemctl reboot")
-    time.sleep(10)
-    deadline = time.time() + 300
+    deadline = time.time() + 400
     while time.time() < deadline:
-        r = subprocess.run([VM, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "true"], capture_output=True)
-        if r.returncode == 0:
+        r = subprocess.run([VM, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "cat /proc/sys/kernel/random/boot_id"],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip() and r.stdout.strip() != old:
+            subprocess.run([VM, "ssh", "-o", "BatchMode=yes", "timeout 300 systemctl is-system-running --wait"], capture_output=True)
             return True
         time.sleep(3)
     return False
@@ -170,6 +178,14 @@ def main():
     check("with 'users', nora may unmount what alice mounted", rc1 == 0 and rc2 == 0 and fs_at("/mnt/e2e-fat") == "", out)
 
     # ---- a standard user with an administrator's password -----------------------------
+    # A bind whose drive is no longer in fstab (written the way Anchorage writes binds).
+    f = put_file("dana", "orphan", vm_fstab() + "/mnt/e2e-gone /srv/e2e-orphan none "
+                 "bind,nofail,x-systemd.requires=/mnt/e2e-gone,x-systemd.requires-mounts-for=/mnt/e2e-gone 0 0\n")
+    con.login("dana")
+    res, _ = con.run(f"write {f} --create", "dana", PASSWORDS["dana"])
+    check("dana writes a bind whose drive isn't in fstab", res.startswith("RESULT ok") and "/srv/e2e-orphan" in vm_fstab(), res)
+    con.logout()
+
     con.login("alice")
     f = put_file("alice", "bind-etc", vm_fstab() + "/etc /mnt/e2e-etc none bind,nofail 0 0\n")
     res, _ = con.run(f"write {f} --create", "sam", PASSWORDS["sam"])
@@ -189,6 +205,8 @@ def main():
     check("its binds show the drive: the whole drive and a folder on it",
           ssh("cat /srv/e2e-bind/data/marker").stdout.strip() == "on-the-drive" and ssh("cat /srv/e2e-data/marker").stdout.strip() == "on-the-drive",
           ssh("findmnt /srv/e2e-bind; findmnt /srv/e2e-data").stdout)
+    check("a bind whose drive is gone from fstab stays unmounted (no empty folder from the system disk)",
+          fs_at("/srv/e2e-orphan") == "", ssh("findmnt /srv/e2e-orphan").stdout)
     check("the missing drive's bind stays unmounted (no empty folder shown in its place)",
           fs_at("/srv/e2e-missing-bind") == "", ssh("findmnt /srv/e2e-missing-bind").stdout)
     check("the 'only when asked' drive is not mounted", fs_at("/mnt/e2e-fat") == "", fs_at("/mnt/e2e-fat"))

@@ -15,6 +15,7 @@
 //   anchorage-e2e-client mount-entry <mount-point>
 //   anchorage-e2e-client mount-temp <spec> <mount-point> <type> [opt1,opt2,...] [--confirm]
 //   anchorage-e2e-client unmount <mount-point> [--confirm]
+//   anchorage-e2e-client suggest <device>        mount-point suggestions (no helper; prints SUGGEST lines)
 //
 // "edit" builds the entry the way the entry editor does (access::defaultsFor, then
 // access::apply for the Access tab choices, opt= for the Advanced tab), adds it or
@@ -31,6 +32,9 @@
 #include "fstabservice.h"
 #include "access.h"
 #include "binds.h"
+#include "drives.h"
+#include "locations.h"
+#include "mounts.h"
 #include "helperclient.h"
 #include "requests.h"
 
@@ -150,6 +154,28 @@ int main(int argc, char *argv[])
         return usage();
     }
     const QString cmd = args.at(1);
+    if (cmd == QLatin1String("suggest")) {
+        // The editor's suggestions for a real device (SPEC §8), from lsblk and mountinfo.
+        const auto volumes = drives::scan();
+        const auto current = mounts::readCurrent();
+        if (!volumes || !current) {
+            out << "RESULT error scan failed\n";
+            return 1;
+        }
+        for (const auto &v : *volumes) {
+            if (v.path == args.at(2)) {
+                for (const QString &s : locations::suggestions(v, qEnvironmentVariable("USER"), *current, [](const QString &p) {
+                         return QFile::exists(p);
+                     })) {
+                    out << "SUGGEST " << s << "\n";
+                }
+                out << "RESULT ok\n";
+                return 0;
+            }
+        }
+        out << "RESULT error no such device\n";
+        return 1;
+    }
     const bool confirm = args.contains(QStringLiteral("--confirm"));
     const bool create = args.contains(QStringLiteral("--create"));
 

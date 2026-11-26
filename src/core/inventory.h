@@ -47,6 +47,7 @@ struct Item {
     bool deviceMissing = false; // fstab names a local device that isn't connected
     Startup startup = Startup::NotInFstab;
     bool userMountable = false; // fstab options user/users/owner
+    bool orphanedBind = false; // a bind whose drive is no longer in fstab (binds::orphaned)
     qint64 size = -1; // file system size, if known
     qint64 used = -1;
 };

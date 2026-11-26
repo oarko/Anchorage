@@ -105,6 +105,20 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
     m_banner->setObjectName(QStringLiteral("banner"));
     m_banner->setCloseButtonVisible(false);
     m_banner->setWordWrap(true);
+    m_removeOrphansAction = new QAction(QIcon::fromTheme(QStringLiteral("list-remove")), i18n("Remove Them"), this);
+    m_removeOrphansAction->setObjectName(QStringLiteral("removeOrphans"));
+    m_removeOrphansAction->setVisible(false);
+    m_banner->addAction(m_removeOrphansAction);
+    connect(m_removeOrphansAction, &QAction::triggered, this, [this] {
+        fstab::File file = fstab::File::parse(currentContent());
+        QList<int> lines = binds::orphaned(file);
+        std::sort(lines.begin(), lines.end(), std::greater<int>());
+        for (const int line : std::as_const(lines)) {
+            file.remove(line);
+        }
+        setPending(file.serialize());
+        statusBar()->showMessage(i18n("Removed the places whose drive is gone. Click Apply to save, or Discard to undo."), 8000);
+    });
     m_tiles = new KCategorizedView(tilesPage);
     m_tiles->setObjectName(QStringLiteral("tiles"));
     m_tiles->setCategoryDrawer(new KCategoryDrawer(m_tiles));
@@ -326,9 +340,15 @@ void MainWindow::updateBanners()
     if (broken > 0) {
         problems.append(i18np("/etc/fstab has %1 line that mount can't read.", "/etc/fstab has %1 lines that mount can't read.", broken));
     }
+    const QList<int> orphans = binds::orphaned(file);
+    if (!orphans.isEmpty()) {
+        problems.append(i18np("%1 place shows a drive that is no longer in /etc/fstab. It isn't mounted at start-up.",
+                              "%1 places show a drive that is no longer in /etc/fstab. They aren't mounted at start-up.", int(orphans.size())));
+    }
     m_banner->setMessageType(KMessageWidget::Warning);
     m_banner->setText(problems.join(QLatin1Char('\n')));
     m_banner->setVisible(!problems.isEmpty());
+    m_removeOrphansAction->setVisible(!orphans.isEmpty());
 
     if (m_pending) {
         const int n = linediff::changeCount(linediff::diff(m_baseline, *m_pending));
@@ -579,13 +599,42 @@ void MainWindow::removeSelected()
     if (!it || !it->entry || m_applying || !canEdit(*it, &why)) {
         return;
     }
-    const QString mountPoint = it->mountPoint;
+    const QString mountPoint = it->entry->mountPoint;
+    const int driveLine = it->fstabLine;
     fstab::File file = fstab::File::parse(currentContent());
-    if (file.remove(it->fstabLine)) {
-        m_selectedId.clear();
-        setPending(file.serialize()); // invalidates `it`
-        statusBar()->showMessage(i18n("Removed %1 from the pending changes. Click Apply to save, or Discard to undo.", mountPoint), 8000);
+
+    // Places that show this drive (bind entries) go with it: left behind, they would show
+    // the drive's empty folder instead (SPEC §8).
+    QList<int> lines{driveLine};
+    if (!binds::isBind(*it->entry)) {
+        const auto shown = binds::findFor(file, mountPoint);
+        if (!shown.isEmpty()) {
+            QStringList places;
+            for (const auto &[line, b] : shown) {
+                places.append(b.subfolder.isEmpty() ? i18n("%1 (the whole drive)", b.target) : i18n("%1 (its folder %2)", b.target, b.subfolder));
+                lines.append(line);
+            }
+            if (KMessageBox::warningContinueCancelList(this,
+                                                       i18np("%2 is also shown at this place, which is removed from fstab too:",
+                                                             "%2 is also shown at these places, which are removed from fstab too:",
+                                                             int(shown.size()), mountPoint),
+                                                       places, i18n("Remove Drive and Its Places?"),
+                                                       KGuiItem(i18n("Remove All"), QStringLiteral("list-remove")))
+                != KMessageBox::Continue) {
+                return;
+            }
+        }
     }
+    // Last line first, so the other line numbers stay valid.
+    std::sort(lines.begin(), lines.end(), std::greater<int>());
+    for (const int line : std::as_const(lines)) {
+        if (!file.remove(line)) {
+            return;
+        }
+    }
+    m_selectedId.clear();
+    setPending(file.serialize()); // invalidates `it`
+    statusBar()->showMessage(i18n("Removed %1 from the pending changes. Click Apply to save, or Discard to undo.", mountPoint), 8000);
 }
 
 void MainWindow::discardChanges()
@@ -831,6 +880,10 @@ MainWindow::MountChoices MainWindow::mountChoices(const inventory::Item &item) c
     }
     if (!item.entry) {
         c.mountAt = full && (item.volume || item.kind == inventory::Kind::Network);
+        return c;
+    }
+    if (item.orphanedBind) {
+        c.hint = i18n("Its drive is no longer in /etc/fstab, so there is nothing to show here.");
         return c;
     }
     // Mounting reads /etc/fstab on disk, so the entry must be saved as shown.

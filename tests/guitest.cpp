@@ -1099,7 +1099,7 @@ private Q_SLOTS:
         e->addBind({QStringLiteral("SteamLibrary"), QStringLiteral("/home/oarko/Games")});
         QCOMPARE(e->findChild<QTreeWidget *>(QStringLiteral("editor.binds"))->topLevelItemCount(), 1);
         const QString preview = e->findChild<QLabel *>(QStringLiteral("editor.preview"))->text();
-        QVERIFY2(preview.contains(QLatin1String("/mnt/Lingames  /run/media/oarko/Lingames  none  bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames")),
+        QVERIFY2(preview.contains(QLatin1String("/mnt/Lingames  /run/media/oarko/Lingames  none  bind,nofail,x-systemd.requires=/mnt/Lingames,x-systemd.requires-mounts-for=/mnt/Lingames")),
                  qPrintable(preview));
         screenshot(*e, QStringLiteral("editor-binds"));
         // A bind place that isn't a usable path is refused right away (protected locations
@@ -1120,8 +1120,8 @@ private Q_SLOTS:
             }
             return false;
         };
-        QVERIFY(has(out, "/mnt/Lingames/SteamLibrary /home/oarko/Games none bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames 0 0"));
-        QVERIFY(has(out, "/mnt/Lingames /run/media/oarko/Lingames none bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames 0 0"));
+        QVERIFY(has(out, "/mnt/Lingames/SteamLibrary /home/oarko/Games none bind,nofail,x-systemd.requires=/mnt/Lingames,x-systemd.requires-mounts-for=/mnt/Lingames 0 0"));
+        QVERIFY(has(out, "/mnt/Lingames /run/media/oarko/Lingames none bind,nofail,x-systemd.requires=/mnt/Lingames,x-systemd.requires-mounts-for=/mnt/Lingames 0 0"));
 
         // The binds show up as their own tiles.
         selectTile(w, QStringLiteral("Games"));
@@ -1135,9 +1135,9 @@ private Q_SLOTS:
         e->accept();
         QCoreApplication::processEvents();
         const QByteArray moved = w.pendingContent();
-        QVERIFY(has(moved, "/srv/Lingames/SteamLibrary /home/oarko/Games none bind,nofail,x-systemd.requires-mounts-for=/srv/Lingames 0 0"));
-        QVERIFY(!moved.contains("requires-mounts-for=/mnt/Lingames"));
-        QVERIFY(has(moved, "/srv/Lingames /run/media/oarko/Lingames none bind,nofail,x-systemd.requires-mounts-for=/srv/Lingames 0 0"));
+        QVERIFY(has(moved, "/srv/Lingames/SteamLibrary /home/oarko/Games none bind,nofail,x-systemd.requires=/srv/Lingames,x-systemd.requires-mounts-for=/srv/Lingames 0 0"));
+        QVERIFY(!moved.contains("=/mnt/Lingames"));
+        QVERIFY(has(moved, "/srv/Lingames /run/media/oarko/Lingames none bind,nofail,x-systemd.requires=/srv/Lingames,x-systemd.requires-mounts-for=/srv/Lingames 0 0"));
 
         // Removing a bind in the editor removes only its line.
         e = openEditor(w, [&w] { w.editSelected(); });
@@ -1151,6 +1151,64 @@ private Q_SLOTS:
         selectTile(w, QStringLiteral("Lingames"));
         w.applyChanges();
         QVERIFY(!src->calls.join(QLatin1Char(' ')).contains(QLatin1String("/run/media/oarko/Lingames")));
+    }
+
+    void removingADriveRemovesItsBinds()
+    {
+        auto *src = new FixtureSource(true,
+                                      "UUID=3f2a7d10-88c4-4b6e-a0d9-5e7b1c2f9c1e /mnt/games btrfs nofail 0 0\n"
+                                      "/mnt/games /run/media/oarko/Lingames none bind,nofail,x-systemd.requires-mounts-for=/mnt/games 0 0\n"
+                                      "/mnt/games/Steam /home/oarko/Steam none bind 0 0\n"
+                                      "/srv/other /srv/elsewhere none bind 0 0\n");
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectTile(w, QStringLiteral("Lingames"));
+        QCOMPARE(w.findChild<QLabel *>(QStringLiteral("info.title"))->text(), QStringLiteral("Lingames"));
+
+        // Cancel: nothing changes.
+        bool clicked = false;
+        clickInNextDialog(QStringLiteral("Cancel"), &clicked);
+        w.removeSelected();
+        QVERIFY(clicked);
+        QVERIFY(!w.hasPendingChanges());
+
+        // Remove All: the drive and both places that show it; the unrelated bind stays.
+        clickInNextDialog(QStringLiteral("Remove All"), &clicked);
+        w.removeSelected();
+        QVERIFY(clicked);
+        const QByteArray out = w.pendingContent();
+        QVERIFY(!out.contains("/mnt/games"));
+        QVERIFY(!out.contains("/run/media/oarko/Lingames"));
+        QVERIFY(out.contains("/srv/other /srv/elsewhere none bind 0 0\n"));
+        QVERIFY(out.contains("tmpfs                                     /tmp")); // the rest is untouched
+    }
+
+    void orphanedBindsAreFlagged()
+    {
+        auto *src = new FixtureSource(true,
+                                      "/mnt/Lingames /home/oarko/games none bind,nofail,x-systemd.requires=/mnt/Lingames,x-systemd.requires-mounts-for=/mnt/Lingames 0 0\n"
+                                      "/mnt/Lingames /mnt/games none bind,nofail,x-systemd.requires-mounts-for=/mnt/Lingames 0 0\n");
+        MainWindow w(src);
+        w.resize(1280, 800);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        auto *banner = w.findChild<KMessageWidget *>(QStringLiteral("banner"));
+        QVERIFY(banner->isVisibleTo(&w));
+        QVERIFY(banner->text().contains(QLatin1String("2 places show a drive that is no longer in /etc/fstab")));
+        selectTile(w, QStringLiteral("games"));
+        QVERIFY(w.findChild<QLabel *>(QStringLiteral("info.title"))->text() == QStringLiteral("games"));
+        screenshot(w, QStringLiteral("orphaned-binds"));
+        QVERIFY(!w.actionCollection()->action(QStringLiteral("mount"))->isEnabled());
+        // The editor says why it won't be mounted.
+        EntryEditor *e = openEditor(w, [&w] { w.editSelected(); });
+        QVERIFY(e->findChild<QLabel *>(QStringLiteral("editor.issues"))->text().contains(QLatin1String("no entry in /etc/fstab mounts")));
+        e->reject();
+        // Remove Them: both lines go, nothing else.
+        w.findChild<QAction *>(QStringLiteral("removeOrphans"))->trigger();
+        QVERIFY(w.hasPendingChanges());
+        QVERIFY(!w.pendingContent().contains("/mnt/Lingames"));
+        QVERIFY(!banner->isVisibleTo(&w));
     }
 };
 
