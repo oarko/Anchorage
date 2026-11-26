@@ -82,8 +82,11 @@ Result<QString> backup(const Paths &paths, const QByteArray &current)
     if (Status s = safefs::writeFileAtomic(paths.backupDir, name, current, 0644, {0, 0}); !s) {
         return Result<QString>::failure(s.error);
     }
-    if (auto all = listBackups(paths); all && all->size() > paths.keepBackups) {
-        for (qsizetype i = paths.keepBackups; i < all->size(); ++i) {
+    // The number to keep comes from the settings file; lowering it takes effect here, at
+    // the next write, never straight away (SPEC §9).
+    const int keep = readSettings(paths).keepBackups;
+    if (auto all = listBackups(paths); all && all->size() > keep) {
+        for (qsizetype i = keep; i < all->size(); ++i) {
             (void)safefs::removeFile(paths.backupDir, all->at(i));
         }
     }
@@ -157,6 +160,7 @@ Paths systemPaths()
     p.configDir = QString::fromUtf8(paths::configDir);
     p.backupDir = QString::fromUtf8(paths::backupDir);
     p.credentialsDir = QString::fromUtf8(paths::credentialsDir);
+    p.configName = QFileInfo(QString::fromUtf8(paths::configFile)).fileName();
     return p;
 }
 
@@ -256,6 +260,33 @@ Outcome removeSharedMount(const Paths &paths, const Caller &caller, const QStrin
         return failed(QStringLiteral("The entry could not be removed."));
     }
     return commit(paths, *current, file.serialize(), {}, {}, false);
+}
+
+settings::Settings readSettings(const Paths &paths)
+{
+    auto data = safefs::readFile(paths.configDir, paths.configName, settings::maxFileSize);
+    return data ? settings::parse(*data) : settings::Settings{};
+}
+
+Outcome writeSettings(const Paths &paths, const Caller &caller, const settings::Settings &s)
+{
+    if (!caller.fullAccess()) {
+        return failed(QStringLiteral("Only driveadmins and administrators can change Anchorage's settings."));
+    }
+    if (const QStringList errors = settings::validate(s); !errors.isEmpty()) {
+        return failed(errors);
+    }
+    if (Status st = ensureDir(paths.configDir, 0755); !st) {
+        return failed(st.error);
+    }
+    auto guard = safefs::lock(paths.configDir, lockName);
+    if (!guard) {
+        return failed(guard.error());
+    }
+    if (Status st = safefs::writeFileAtomic(paths.configDir, paths.configName, settings::serialize(s), 0644, {0, 0}); !st) {
+        return failed(st.error);
+    }
+    return {};
 }
 
 bool isBackupName(const QString &name)

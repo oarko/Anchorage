@@ -5,6 +5,7 @@
 #include "drives.h"
 #include "helperclient.h"
 #include "requests.h"
+#include "settings.h"
 #include "verify.h"
 #include "mounts.h"
 
@@ -40,6 +41,7 @@ struct Snapshot {
     QStringList backups; // newest first
     anchorage::Caller me;
     QList<Account> accounts; // regular user accounts (UID 1000-59999 with a login shell)
+    anchorage::settings::Settings settings; // /etc/anchorage/config
 };
 
 // Where the data comes from: the real system, or fixtures in tests.
@@ -54,6 +56,8 @@ public:
     // Asks the helper to replace /etc/fstab (password prompt included). `done` runs once.
     using Done = std::function<void(const anchorage::client::Reply &)>;
     virtual void writeFstab(const anchorage::requests::WriteFstab &request, QWidget *window, Done done) = 0;
+    virtual void restoreBackup(const anchorage::requests::Restore &request, QWidget *window, Done done) = 0;
+    virtual void writeSettings(const anchorage::settings::Settings &settings, QWidget *window, Done done) = 0;
     // findmnt --verify on a proposed file (SPEC §9 "Validate before writing").
     virtual QList<anchorage::verify::Finding> verify(const QByteArray &content) = 0;
 
@@ -75,6 +79,8 @@ public:
     Snapshot load() override;
     QByteArray readBackup(const QString &name) override;
     void writeFstab(const anchorage::requests::WriteFstab &request, QWidget *window, Done done) override;
+    void restoreBackup(const anchorage::requests::Restore &request, QWidget *window, Done done) override;
+    void writeSettings(const anchorage::settings::Settings &settings, QWidget *window, Done done) override;
     QList<anchorage::verify::Finding> verify(const QByteArray &content) override;
 
 private:

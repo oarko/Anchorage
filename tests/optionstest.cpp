@@ -349,6 +349,48 @@ private Q_SLOTS:
         QCOMPARE(linediff::changeCount(linediff::diff(QByteArray(), b)), 5);
     }
 
+    void sideBySide()
+    {
+        using linediff::Row;
+        const QByteArray now = "# fstab\nUUID=1 / btrfs defaults 0 0\n\nLABEL=new /mnt/new ext4 nofail 0 0\ntmpfs /tmp tmpfs defaults 0 0\n";
+        const QByteArray backup = "# fstab\nUUID=1 / btrfs noatime 0 0\n\ntmpfs /tmp tmpfs defaults 0 0\n//nas/x /mnt/x cifs guest 0 0\n";
+        const auto rows = linediff::sideBySide(now, backup);
+        QStringList kinds;
+        for (const auto &r : rows) {
+            kinds.append(QString::number(int(r.kind)));
+        }
+        // same, changed (options), same (blank), removed (left only), same, added (right only)
+        QCOMPARE(kinds.join(QLatin1Char(' ')), QStringLiteral("0 3 0 1 0 2"));
+        const Row &changed = rows.at(1);
+        QCOMPARE(changed.left.text(), QStringLiteral("UUID=1 / btrfs defaults 0 0"));
+        QCOMPARE(changed.right.text(), QStringLiteral("UUID=1 / btrfs noatime 0 0"));
+        QStringList leftChanged;
+        QStringList rightChanged;
+        for (const auto &seg : changed.left.segments) {
+            if (seg.changed) {
+                leftChanged.append(seg.text);
+            }
+        }
+        for (const auto &seg : changed.right.segments) {
+            if (seg.changed) {
+                rightChanged.append(seg.text);
+            }
+        }
+        QVERIFY(!leftChanged.isEmpty() && !rightChanged.isEmpty());
+        QVERIFY(leftChanged.join(QString()).size() < 9); // only the differing letters, not the whole line
+        // Fillers are opposite removed and added lines; real blank lines are present.
+        QVERIFY(rows.at(3).left.present && !rows.at(3).right.present);
+        QVERIFY(!rows.at(5).left.present && rows.at(5).right.present);
+        QVERIFY(rows.at(2).left.present && rows.at(2).left.text().isEmpty());
+        QCOMPARE(rows.at(5).right.line, 5);
+        // Unrelated lines are not paired.
+        const auto unrelated = linediff::sideBySide("aaaa bbbb\n", "zzzz yyyy\n");
+        QCOMPARE(unrelated.size(), 2);
+        QCOMPARE(unrelated.at(0).kind, Row::Kind::Removed);
+        QCOMPARE(unrelated.at(1).kind, Row::Kind::Added);
+        QCOMPARE(linediff::sideBySide(now, now).size(), 5);
+    }
+
     // ---- findmnt ---------------------------------------------------------------------
     void parsesFindmntOutput()
     {

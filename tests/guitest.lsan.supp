@@ -1,0 +1,6 @@
+# LeakSanitizer suppressions for guitest only.
+# KMessageBox's default Notify option hands the message text to KDE's notification
+# integration, which is delivered from a later event loop and still alive when the test
+# process exits. Shown by removing the Notify option: the leak disappears. Not
+# Anchorage's memory; the app keeps the normal KDE behaviour.
+leak:KMessageBox::createKMessageBox

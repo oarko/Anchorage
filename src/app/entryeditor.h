@@ -31,6 +31,7 @@ struct EditorContext {
     QStringList rootSpecs; // device fields of the "/" entries (for system-entry detection)
     bool systemUnlocked = false; // "Allow editing system entries" is on
     QList<Account> users; // people who can own files (Access tab)
+    QString ntfsDriver = QStringLiteral("ntfs3"); // suggested for NTFS drives (settings)
 };
 
 // The entry editor dialog (SPEC §8, §15): Basic / Access / Advanced tabs and a live
@@ -57,6 +58,10 @@ public:
 
     enum class IdentifyBy { Uuid, Label, PartUuid, Path };
     static QString specFor(const anchorage::drives::Volume &volume, IdentifyBy by);
+
+    // Asks for confirmation first when ntfs3 is combined with restrictive permissions.
+    // (QDialog::accept is already a virtual slot.)
+    void accept() override;
 
 private:
     QWidget *buildBasicTab();

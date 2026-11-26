@@ -107,6 +107,7 @@ group database; nothing the GUI says about the user is trusted.
 | `restorebackup` | Restore a named backup; goes through the same checks as `writefstab` | admin password | driveadmins: own password |
 | `addsharedmount` | Add one shared network mount in `/mnt/<name>` | admin password | netmount, driveadmins: own password |
 | `removesharedmount` | Remove one shared network mount | admin password | netmount, driveadmins: own password |
+| `writesettings` | Replace `/etc/anchorage/config` (system-wide settings); refused unless the caller is in driveadmins or an administrator; values validated | admin password | driveadmins: own password |
 
 How `writefstab` decides (`policy::planFstabWrite`):
 - The GUI sends the whole new file plus the SHA-256 of the version it edited. If the file
@@ -130,7 +131,8 @@ Mount points: `/etc/anchorage/blocked-paths` can only **add** protected location
 built-in list always applies.
 
 Fixed paths (compile-time constants): `/etc/fstab`, `/etc/anchorage/` (lock file,
-`blocked-paths`), `/etc/anchorage/backups/` (newest 10 kept), `/etc/anchorage/credentials/`.
+`blocked-paths`, `config`), `/etc/anchorage/backups/` (newest N kept, see §9),
+`/etc/anchorage/credentials/`.
 Polkit group rule installed to `/usr/share/polkit-1/rules.d/60-anchorage-groups.rules`.
 
 Not yet implemented: mount/unmount, login mounts (`mount.usershare`), credentials files,
@@ -192,8 +194,12 @@ Implemented (2026-11-25) in `src/app/entryeditor.*`, `src/core/access.*`, `src/c
   missing `nofail` for boot mounts (warning), bind mounts without `bind`.
 - **ntfs3 finding** (kernel 7.0, `tests/mounttest.cpp`): the driver shows the drive's top
   folder as `0777` whatever the umask, so every user can create files there (subfolders
-  follow the umask; ntfs-3g gets it right). The editor warns when "only the owner" or
-  "others read" is chosen with `ntfs3`.
+  follow the umask; ntfs-3g gets it right). Agreed 2026-11-25:
+  - Both drivers are offered for every NTFS entry. The driver suggested for new NTFS
+    entries is the system-wide setting `ntfs-driver` (default **ntfs3**, the faster one).
+  - Soft notice in the editor while ntfs3 is combined with "only the owner" or "others can
+    read", and a confirmation when the entry is added or kept: **Use ntfs-3g Instead** /
+    **Keep ntfs3** / **Cancel**.
 - Pending changes: the main window keeps an edited copy of the file. The Apply bar shows
   Discard / Preview… / Apply; Apply checks the plan locally (`policy::planFstabWrite`),
   asks for typed confirmation for protected locations (sudo), runs `findmnt --verify`, and
@@ -208,6 +214,28 @@ Implemented (2026-11-25) in `src/app/entryeditor.*`, `src/core/access.*`, `src/c
 | Validate before writing | **On** | Own checks + `findmnt --verify` (implemented: run in the GUI before the password prompt; missing folders the helper will create, and missing devices of `nofail`/`noauto` entries, are not reported) |
 | Test mount + undo offer | **On** | After saving: `daemon-reload`, mount the new/changed entries, offer to restore on failure. **Not yet implemented** (needs the helper's mount action) |
 | Preview changes | **Off** | "Preview…" button always available; admin setting forces it on for everyone |
+
+Backups and restore (agreed 2026-11-25, implemented):
+- A backup is made by the helper before every write, including a restore (so a restore
+  can be undone by restoring again).
+- Number kept: setting `keep-backups` in `/etc/anchorage/config`, **1-100, default 10**
+  (never 0). Lowering it deletes the extra backups at the **next write**, never straight away.
+- Settings (`/etc/anchorage/config`, `key = value` lines) are **system-wide**, changed in
+  Settings > Configure Anchorage by driveadmins/administrators through `writesettings`;
+  everyone else sees them read-only. Reading is forgiving (bad values fall back to the
+  defaults), writing is strict.
+- The Backups page lists the versions (newest first, local time) and compares the
+  selected one with the file on disk **side by side**: left = now, right = backup.
+  - Line only on the left (removed by restoring): red; line only on the right (added
+    back): green. The other side shows a hatched filler line.
+  - Similar lines (≥ 50 % of characters in common) are paired as one **changed** line:
+    yellow on both sides, the differing characters underlined in red (left) and green (right).
+  - Every real line ends with a faint `↵`, so a real blank line (just `↵`) can't be
+    mistaken for a filler (no `↵`). Line numbers on both sides; both sides scroll together.
+  - Everything is shown (no folding of unchanged lines); only whole files are restored.
+- Restore: unsaved editor changes are discarded first (after asking); the same local checks
+  as Apply (rights, typed confirmation for protected locations), then a confirmation with
+  the number of changed lines, then the password prompt.
 
 ## 10. Drives
 

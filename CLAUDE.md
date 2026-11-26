@@ -12,8 +12,10 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
 
 - Design agreed: layout C (Dolphin-like, QtWidgets), see SPEC §15.
 - Done: fstab reader/writer, root helper + permission rules, drive detection, main window,
-  entry editor (Basic/Access/Advanced, option catalogue) with pending changes and Apply.
-  Next: test mount after saving + restore backup in the GUI (SPEC §9), then network shares (SPEC §11).
+  entry editor (Basic/Access/Advanced, option catalogue) with pending changes and Apply,
+  system-wide settings (`writesettings`), Backups page with side-by-side compare and restore.
+  Next: test mount after saving with an undo offer (SPEC §9, needs a helper mount action),
+  then network shares (SPEC §11).
 - SMB share *creation* is a planned phase 2 feature (SPEC §16); keep v1 scope to mounting.
 - Ask the user before starting implementation.
 
@@ -102,6 +104,12 @@ These come from the user's requirements and apply to every change:
   FAT and exFAT disk images in the VM, attaches them as loop devices and checks the scanner.
 - **GUI**: `tests/guitest.cpp` builds the real main window from fixtures; set
   `ANCHORAGE_SCREENSHOTS=<dir>` to save screenshots of each view for review.
+  Message boxes are answered with `clickInNextDialog()`, which only looks at
+  `QApplication::activeModalWidget()` (the editor behind a message box has buttons too).
+  ctest runs it with `tests/guitest.lsan.supp`: KMessageBox's Notify option hands the text
+  to KDE's notification integration, which is still alive at exit (proved by removing
+  Notify). When running guitest by hand under ASan, set
+  `LSAN_OPTIONS=suppressions=$PWD/tests/guitest.lsan.supp`.
 - `KCategorizedView` (KF 6.24) crashes (ASan: negative-size-param) when a filter change
   removes rows across categories; `InventoryFilter` uses `invalidate()` instead.
 - **End-to-end** (real KAuth -> D-Bus -> polkit -> installed helper): `tests/vm/e2e.sh`

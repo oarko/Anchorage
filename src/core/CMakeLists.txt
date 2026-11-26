@@ -23,6 +23,8 @@ add_library(anchorage_core STATIC
     mountpolicy.h
     result.h
     safefs.cpp
+    settings.cpp
+    settings.h
     safefs.h
     fstab.cpp
     fstab.h

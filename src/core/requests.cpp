@@ -19,6 +19,8 @@ const QString kOptions = QStringLiteral("options");
 const QString kDump = QStringLiteral("dump");
 const QString kPass = QStringLiteral("pass");
 const QString kBackup = QStringLiteral("backup");
+const QString kKeepBackups = QStringLiteral("keepBackups");
+const QString kNtfsDriver = QStringLiteral("ntfsDriver");
 
 // Every key present, nothing else.
 QString checkKeys(const QVariantMap &args, const QStringList &required, const QStringList &optional = {})
@@ -112,6 +114,29 @@ Result<Restore> decodeRestore(const QVariantMap &args)
         return R::failure(QStringLiteral("Request fields have the wrong type."));
     }
     return Restore{args[kBackup].toString(), args[kConfirm].toBool()};
+}
+
+Result<settings::Settings> decodeSettings(const QVariantMap &args)
+{
+    using R = Result<settings::Settings>;
+    if (const QString e = checkKeys(args, {kKeepBackups, kNtfsDriver}); !e.isEmpty()) {
+        return R::failure(e);
+    }
+    if (!is(args[kKeepBackups], QMetaType::Int) || !is(args[kNtfsDriver], QMetaType::QString)) {
+        return R::failure(QStringLiteral("Request fields have the wrong type."));
+    }
+    settings::Settings s;
+    s.keepBackups = args[kKeepBackups].toInt();
+    s.ntfsDriver = args[kNtfsDriver].toString();
+    if (const QStringList errors = settings::validate(s); !errors.isEmpty()) {
+        return R::failure(errors.join(QLatin1Char(' ')));
+    }
+    return s;
+}
+
+QVariantMap encodeSettings(const settings::Settings &s)
+{
+    return {{kKeepBackups, s.keepBackups}, {kNtfsDriver, s.ntfsDriver}};
 }
 
 QVariantMap encodeWriteFstab(const WriteFstab &r)

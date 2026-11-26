@@ -294,6 +294,31 @@ def main():
     check("dana restores the latest backup", res.startswith("RESULT ok") and vm_fstab() == current, f"{res} {prompts}")
     serial.logout()
 
+    # 13-16. Settings (writesettings): driveadmins and administrators only.
+    serial.login("alice")
+    res, prompts = serial.run("settings 2 ntfs", identity="sam", password=PASSWORDS["sam"])
+    check("alice can't change settings, even with an administrator's password",
+          res.startswith("RESULT error") and "driveadmins" in res and ssh("sudo test -e /etc/anchorage/config && echo yes").stdout.strip() != "yes",
+          f"{res} {prompts}")
+    serial.logout()
+
+    serial.login("dana")
+    res, prompts = serial.run("settings 2 ntfs", identity="dana", password=PASSWORDS["dana"])
+    config = ssh("cat /etc/anchorage/config").stdout
+    mode = ssh("stat -c %U:%G:%a /etc/anchorage/config").stdout.strip()
+    check("dana sets 'keep 2 backups' with her own password; file is root:root 0644",
+          res.startswith("RESULT ok") and "keep-backups = 2" in config and "ntfs-driver = ntfs" in config and mode == "root:root:644"
+          and prompts == ["password"], f"{res} {prompts} {mode}")
+    res, _ = serial.run("settings 0 ntfs3", identity="dana", password=PASSWORDS["dana"])
+    check("out-of-range settings are refused", res.startswith("RESULT error") and "keep-backups = 2" in ssh("cat /etc/anchorage/config").stdout, res)
+    count_before = len(backups())
+    current = vm_fstab()
+    f = put_file("dana", "f9", add_line(current, "tmpfs /mnt/e2e-keep tmpfs nofail,noauto 0 0"))
+    res, _ = serial.run(f"write {f}", identity="dana", password=PASSWORDS["dana"])
+    check("the next write keeps only the newest 2 backups", res.startswith("RESULT ok") and count_before > 2 and len(backups()) == 2,
+          f"{res} before={count_before} after={len(backups())}")
+    serial.logout()
+
     failed = [r for r in results if not r[1]]
     ssh("sudo chvt 1")
     print(f"\n{len(results) - len(failed)}/{len(results)} scenarios passed")

@@ -85,7 +85,8 @@ void SystemDataSource::watchFiles()
 {
     const QString fstab = QString::fromUtf8(paths::fstab);
     const QString backups = QString::fromUtf8(paths::backupDir);
-    for (const QString &p : {fstab, backups}) {
+    const QString config = QString::fromUtf8(paths::configFile);
+    for (const QString &p : {fstab, backups, config}) {
         if (QFile::exists(p) && !m_watcher->files().contains(p) && !m_watcher->directories().contains(p)) {
             m_watcher->addPath(p);
         }
@@ -121,6 +122,7 @@ Snapshot SystemDataSource::load()
         s.me = *me;
     }
     s.accounts = regularAccounts();
+    s.settings = service::readSettings(service::systemPaths());
     return s;
 }
 
@@ -143,4 +145,16 @@ QList<verify::Finding> SystemDataSource::verify(const QByteArray &content)
 {
     auto f = verify::findmnt(content);
     return f ? *f : QList<verify::Finding>{};
+}
+
+void SystemDataSource::restoreBackup(const requests::Restore &request, QWidget *window, Done done)
+{
+    client::run(client::Action::RestoreBackup, requests::encodeRestore(request), window ? window->window()->windowHandle() : nullptr, this,
+                std::move(done));
+}
+
+void SystemDataSource::writeSettings(const settings::Settings &s, QWidget *window, Done done)
+{
+    client::run(client::Action::WriteSettings, requests::encodeSettings(s), window ? window->window()->windowHandle() : nullptr, this,
+                std::move(done));
 }

@@ -3,6 +3,7 @@
 
 #include "datasource.h"
 #include "inventory.h"
+#include "mountpolicy.h"
 
 #include <KXmlGuiWindow>
 
@@ -48,11 +49,16 @@ public:
     void discardChanges();
     void previewChanges();
     void setSystemEditing(bool on);
+    void restoreBackup(const QString &name);
+    void showSettings();
 
 Q_SIGNALS:
     // An editor dialog was created (tests use this to drive it).
     void editorOpened(QDialog *editor);
     void applyFinished(bool ok);
+    void restoreFinished(bool ok);
+    void settingsFinished(bool ok);
+    void settingsOpened(QDialog *dialog);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -71,6 +77,11 @@ private:
     EditorContext editorContext(int editedLine) const;
     void editItem(const anchorage::inventory::Item &item);
     bool canEdit(const anchorage::inventory::Item &item, QString *why = nullptr) const;
+    // Shared by Apply and Restore: checks `proposed` against the caller's rights and asks
+    // for the typed confirmation for protected locations. Returns false if not allowed or
+    // cancelled; `confirm` says whether the confirmation was given.
+    bool checkWrite(const QByteArray &proposed, bool *confirm, anchorage::policy::Plan *plan);
+    void showHelperError(const anchorage::client::Reply &reply, const QString &what);
 
     DataSource *m_source;
     Snapshot m_snapshot;
@@ -84,6 +95,7 @@ private:
     PlacesPanel *m_places;
     KCategorizedView *m_tiles;
     InfoPanel *m_info;
+    QWidget *m_infoScroll;
     BackupsPage *m_backups;
     QStackedWidget *m_pages;
     KMessageWidget *m_banner;

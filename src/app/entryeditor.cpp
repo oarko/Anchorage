@@ -6,6 +6,7 @@
 
 #include <KColorScheme>
 #include <KLocalizedString>
+#include <KMessageBox>
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -147,11 +148,11 @@ QString mountPointName(const drives::Volume &v)
     return base.isEmpty() ? QStringLiteral("drive") : base;
 }
 
-QString typeForVolume(const QString &fsType)
+QString typeForVolume(const QString &fsType, const QString &ntfsDriver)
 {
-    // lsblk says "ntfs"; the in-kernel ntfs3 driver is faster than ntfs-3g.
+    // lsblk says "ntfs"; which driver to suggest is a setting (ntfs3 or ntfs-3g).
     if (fsType == QLatin1String("ntfs")) {
-        return QStringLiteral("ntfs3");
+        return ntfsDriver == QLatin1String("ntfs") ? QStringLiteral("ntfs") : QStringLiteral("ntfs3");
     }
     return fsType;
 }
@@ -330,7 +331,7 @@ void EntryEditor::useVolume(const drives::Volume &v)
 {
     const auto by = IdentifyBy(m_identify->currentData().toInt());
     m_entry.spec = specFor(v, by);
-    const QString type = typeForVolume(v.fsType);
+    const QString type = typeForVolume(v.fsType, m_ctx.ntfsDriver);
     if (!type.isEmpty() && type != m_entry.type) {
         typeChanged(type);
     }
@@ -1012,4 +1013,33 @@ QList<Issue> EntryEditor::issues() const
         error(QStringLiteral("options"), i18n("A bind mount needs the 'bind' option (Advanced tab)."));
     }
     return out;
+}
+
+void EntryEditor::accept()
+{
+    const access::Settings s = access::read(m_entry.options, m_entry.type, m_catalogue);
+    if (m_entry.type == QLatin1String("ntfs3") && (s.sharing == Sharing::OwnerOnly || s.sharing == Sharing::OthersRead)) {
+        // Found by tests/mounttest.cpp on kernel 7.0: ntfs3 shows the top folder as 0777.
+        const auto answer = KMessageBox::questionTwoActionsCancel(
+            this,
+            i18n("With the ntfs3 driver, every user can open the drive's top folder and create files in it, whatever permissions are "
+                 "chosen here. Folders inside it do follow the permissions.<br><br>"
+                 "The ntfs-3g driver applies the permissions to the top folder too, but is slower."),
+            i18n("Top Folder Is Open to Everyone"),
+            KGuiItem(i18n("Use ntfs-3g Instead"), QStringLiteral("security-high")),
+            KGuiItem(i18n("Keep ntfs3"), QStringLiteral("dialog-ok")),
+            KStandardGuiItem::cancel(),
+            QString(),
+            KMessageBox::Dangerous);
+        if (answer == KMessageBox::Cancel) {
+            return;
+        }
+        if (answer == KMessageBox::PrimaryAction) {
+            typeChanged(QStringLiteral("ntfs"));
+            if (fstab::hasErrors(issues())) {
+                return; // show what needs fixing instead of closing
+            }
+        }
+    }
+    QDialog::accept();
 }

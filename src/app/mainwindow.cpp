@@ -10,6 +10,7 @@
 #include "linediff.h"
 #include "mountpolicy.h"
 #include "placespanel.h"
+#include "settingsdialog.h"
 #include "tiledelegate.h"
 
 #include <KActionCollection>
@@ -115,6 +116,7 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
 
     // The info panel scrolls when the window is short (e.g. while the Apply bar shows).
     auto *infoScroll = new QScrollArea(split);
+    m_infoScroll = infoScroll;
     infoScroll->setWidgetResizable(true);
     infoScroll->setFrameShape(QFrame::NoFrame);
     infoScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -135,6 +137,8 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
     statusBar()->addPermanentWidget(m_statusRight);
 
     connect(m_places, &PlacesPanel::placeChanged, this, [this](PlacesPanel::Place place) {
+        // The Backups page needs the width for its two columns.
+        m_infoScroll->setVisible(place != PlacesPanel::Place::Backups);
         if (place == PlacesPanel::Place::Backups) {
             m_pages->setCurrentWidget(m_backups);
         } else {
@@ -158,6 +162,7 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
             QDesktopServices::openUrl(QUrl::fromLocalFile(it->mountedAt));
         }
     });
+    connect(m_backups, &BackupsPage::restoreRequested, this, &MainWindow::restoreBackup);
     connect(m_info, &InfoPanel::editRequested, this, &MainWindow::editSelected);
     connect(m_info, &InfoPanel::removeRequested, this, &MainWindow::removeSelected);
     connect(m_source, &DataSource::changed, this, &MainWindow::reload);
@@ -173,6 +178,7 @@ void MainWindow::setupActions()
     KStandardAction::quit(this, &QWidget::close, ac);
     KStandardAction::redisplay(this, &MainWindow::reload, ac);
     KStandardAction::find(this, [this] { m_search->setFocus(); m_search->selectAll(); }, ac);
+    KStandardAction::preferences(this, &MainWindow::showSettings, ac);
 
     m_newAction = ac->addAction(QStringLiteral("entry_new"), this, &MainWindow::newEntry);
     m_newAction->setText(i18n("New fstab Entry…"));
@@ -233,7 +239,8 @@ void MainWindow::rebuild()
     const bool fullAccess = m_snapshot.me.fullAccess();
     m_filter->setShowSystem(fullAccess);
     m_places->setShowSystem(fullAccess);
-    m_backups->setBackups(m_snapshot.backups);
+    // The Backups page compares with the file on disk, not with pending changes.
+    m_backups->setBackups(m_snapshot.backups, m_snapshot.fstab, m_snapshot.settings.keepBackups);
 
     int all = 0;
     int drives = 0;
@@ -333,6 +340,8 @@ void MainWindow::updateActions()
     m_applyAction->setEnabled(pending && !m_applying && m_snapshot.fstab == m_baseline);
     m_discardAction->setEnabled(pending && !m_applying);
     m_previewAction->setEnabled(pending);
+    m_backups->setRestoreEnabled(!m_applying && m_snapshot.fstabError.isEmpty(),
+                                 m_applying ? i18n("Wait until saving has finished.") : QString());
 }
 
 void MainWindow::updateHeader()
@@ -412,6 +421,7 @@ EditorContext MainWindow::editorContext(int editedLine) const
     ctx.me = m_snapshot.me;
     ctx.systemUnlocked = m_systemUnlocked;
     ctx.users = m_snapshot.accounts;
+    ctx.ntfsDriver = m_snapshot.settings.ntfsDriver;
     const fstab::File file = fstab::File::parse(currentContent());
     for (const int i : file.entryLines()) {
         const auto &entry = file.lines().at(static_cast<std::size_t>(i)).entry;
@@ -573,26 +583,9 @@ void MainWindow::applyChanges()
     }
     const QByteArray proposed = *m_pending;
 
-    // The helper checks everything again; checking here first gives clear messages and
-    // asks for the typed confirmation before the password prompt.
     bool confirm = false;
-    policy::Plan plan = policy::planFstabWrite(m_baseline, proposed, m_snapshot.me, false);
-    QStringList blocked;
-    for (const QString &mp : std::as_const(plan.newMountPoints)) {
-        if (policy::classifyMountPoint(mp).zone == policy::Zone::Blocked) {
-            blocked.append(mp);
-        }
-    }
-    if (!blocked.isEmpty() && m_snapshot.me.sudo) {
-        ProtectedConfirmDialog dlg(blocked, this);
-        if (dlg.exec() != QDialog::Accepted) {
-            return;
-        }
-        confirm = true;
-        plan = policy::planFstabWrite(m_baseline, proposed, m_snapshot.me, true);
-    }
-    if (!plan.ok()) {
-        KMessageBox::detailedError(this, i18n("These changes can't be saved:"), plan.errors.join(QLatin1Char('\n')));
+    policy::Plan plan;
+    if (!checkWrite(proposed, &confirm, &plan)) {
         return;
     }
 
@@ -640,23 +633,136 @@ void MainWindow::applyChanges()
             reload();
             break;
         }
-        case client::Reply::Status::Cancelled:
-            statusBar()->showMessage(i18n("Not saved: the password prompt was closed."), 8000);
-            updateActions();
-            break;
-        case client::Reply::Status::Denied:
-            statusBar()->clearMessage();
-            KMessageBox::error(this, i18n("Not saved: you are not allowed to change /etc/fstab, or the password was wrong."));
-            updateActions();
-            break;
-        case client::Reply::Status::Failed:
-            statusBar()->clearMessage();
-            KMessageBox::detailedError(this, i18n("/etc/fstab was not changed."), reply.message);
+        default:
+            showHelperError(reply, i18n("/etc/fstab was not changed."));
             updateActions();
             break;
         }
         Q_EMIT applyFinished(reply.ok());
     });
+}
+
+bool MainWindow::checkWrite(const QByteArray &proposed, bool *confirm, policy::Plan *plan)
+{
+    // The helper checks everything again; checking here first gives clear messages and
+    // asks for the typed confirmation before the password prompt.
+    *confirm = false;
+    *plan = policy::planFstabWrite(m_snapshot.fstab, proposed, m_snapshot.me, false);
+    QStringList blocked;
+    for (const QString &mp : std::as_const(plan->newMountPoints)) {
+        if (policy::classifyMountPoint(mp).zone == policy::Zone::Blocked) {
+            blocked.append(mp);
+        }
+    }
+    if (!blocked.isEmpty() && m_snapshot.me.sudo) {
+        ProtectedConfirmDialog dlg(blocked, this);
+        if (dlg.exec() != QDialog::Accepted) {
+            return false;
+        }
+        *confirm = true;
+        *plan = policy::planFstabWrite(m_snapshot.fstab, proposed, m_snapshot.me, true);
+    }
+    if (!plan->ok()) {
+        KMessageBox::detailedError(this, i18n("These changes can't be saved:"), plan->errors.join(QLatin1Char('\n')));
+        return false;
+    }
+    return true;
+}
+
+void MainWindow::showHelperError(const client::Reply &reply, const QString &what)
+{
+    statusBar()->clearMessage();
+    switch (reply.status) {
+    case client::Reply::Status::Ok:
+        break;
+    case client::Reply::Status::Cancelled:
+        statusBar()->showMessage(i18n("Nothing was changed: the password prompt was closed."), 8000);
+        break;
+    case client::Reply::Status::Denied:
+        KMessageBox::error(this, i18n("%1 You are not allowed to do this, or the password was wrong.", what));
+        break;
+    case client::Reply::Status::Failed:
+        KMessageBox::detailedError(this, what, reply.message);
+        break;
+    }
+}
+
+void MainWindow::restoreBackup(const QString &name)
+{
+    if (m_applying || name.isEmpty()) {
+        return;
+    }
+    const QByteArray backup = m_source->readBackup(name);
+    if (backup.isEmpty() && !m_snapshot.fstab.isEmpty()) {
+        KMessageBox::error(this, i18n("The backup %1 could not be read.", name));
+        return;
+    }
+    if (m_pending) {
+        if (KMessageBox::warningContinueCancel(this, i18n("You have changes that are not saved yet. Restoring a backup discards them."),
+                                               i18n("Discard Unsaved Changes?"), KGuiItem(i18n("Discard and Continue")))
+            != KMessageBox::Continue) {
+            return;
+        }
+        m_pending.reset();
+        rebuild();
+    }
+    bool confirm = false;
+    policy::Plan plan;
+    if (!checkWrite(backup, &confirm, &plan)) {
+        return;
+    }
+    const int n = linediff::changeCount(linediff::diff(m_snapshot.fstab, backup));
+    if (KMessageBox::warningContinueCancel(this,
+                                           i18np("Restore /etc/fstab to the version from %2? %1 line changes.<br><br>"
+                                                 "The current file is backed up first, so this can be undone.",
+                                                 "Restore /etc/fstab to the version from %2? %1 lines change.<br><br>"
+                                                 "The current file is backed up first, so this can be undone.",
+                                                 n, BackupsPage::displayName(name)),
+                                           i18n("Restore Backup"), KGuiItem(i18n("Restore"), QStringLiteral("document-revert")))
+        != KMessageBox::Continue) {
+        return;
+    }
+    m_applying = true;
+    updateActions();
+    statusBar()->showMessage(i18n("Restoring /etc/fstab…"));
+    m_source->restoreBackup({name, confirm}, this, [this, name](const client::Reply &reply) {
+        m_applying = false;
+        if (reply.ok()) {
+            const QString saved = reply.data.value(QStringLiteral("backup")).toString();
+            statusBar()->showMessage(i18n("Restored the version from %1. The file as it was before is in the list too (%2).",
+                                          BackupsPage::displayName(name), BackupsPage::displayName(saved)),
+                                     15000);
+            reload();
+        } else {
+            showHelperError(reply, i18n("/etc/fstab was not restored."));
+            updateActions();
+        }
+        Q_EMIT restoreFinished(reply.ok());
+    });
+}
+
+void MainWindow::showSettings()
+{
+    auto *dlg = new SettingsDialog(m_snapshot.settings, m_snapshot.me.fullAccess(), this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QDialog::accepted, this, [this, dlg] {
+        const settings::Settings wanted = dlg->settings();
+        if (wanted == m_snapshot.settings) {
+            return;
+        }
+        statusBar()->showMessage(i18n("Saving settings…"));
+        m_source->writeSettings(wanted, this, [this](const client::Reply &reply) {
+            if (reply.ok()) {
+                statusBar()->showMessage(i18n("Settings saved."), 8000);
+                reload();
+            } else {
+                showHelperError(reply, i18n("The settings were not saved."));
+            }
+            Q_EMIT settingsFinished(reply.ok());
+        });
+    });
+    Q_EMIT settingsOpened(dlg);
+    dlg->open();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

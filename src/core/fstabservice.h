@@ -3,6 +3,7 @@
 
 #include "caller.h"
 #include "fstab.h"
+#include "settings.h"
 
 #include <QByteArray>
 #include <QString>
@@ -24,7 +25,7 @@ struct Paths {
     // Prepended to mount points when creating or inspecting their folders. Empty on a real
     // system; tests point it at a temporary folder so /mnt/x becomes <tmp>/mnt/x.
     QString mountRoot;
-    int keepBackups = 10;
+    QString configName = QStringLiteral("config"); // settings file inside configDir
 };
 Paths systemPaths();
 
@@ -53,6 +54,11 @@ Outcome writeFstab(const Paths &paths,
 // Adds or removes one shared network mount in /mnt (netmount group).
 Outcome addSharedMount(const Paths &paths, const Caller &caller, const fstab::Entry &entry);
 Outcome removeSharedMount(const Paths &paths, const Caller &caller, const QString &mountPoint);
+
+// Settings (/etc/anchorage/config). Reading needs no rights; anyone may read the file.
+settings::Settings readSettings(const Paths &paths);
+// Only driveadmins and administrators may change them (SPEC §4.2).
+Outcome writeSettings(const Paths &paths, const Caller &caller, const settings::Settings &settings);
 
 // Backups: names look like fstab-2026-11-24T23-10-05Z (optionally with -N).
 bool isBackupName(const QString &name);

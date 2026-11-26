@@ -17,6 +17,10 @@ add_library(anchorage_ui STATIC
     mainwindow.h
     placespanel.cpp
     placespanel.h
+    settingsdialog.cpp
+    settingsdialog.h
+    sidebyside.cpp
+    sidebyside.h
     tiledelegate.cpp
     tiledelegate.h
 )

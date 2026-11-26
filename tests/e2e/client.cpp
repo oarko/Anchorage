@@ -11,6 +11,7 @@
 //                             [nofail=0|1] [netdev=0|1] [uid=N] [gid=N] [sharing=owner|read|everyone]
 //                             [opt=<option>]... [--confirm]
 //   anchorage-e2e-client edit-remove <mount-point>
+//   anchorage-e2e-client settings <keep-backups> <ntfs3|ntfs>
 //
 // "edit" builds the entry the way the entry editor does (access::defaultsFor, then
 // access::apply for the Access tab choices, opt= for the Advanced tab), adds it or
@@ -170,6 +171,12 @@ int main(int argc, char *argv[])
         }
         action = QStringLiteral("writefstab");
         request = requests::encodeWriteFstab({service::fingerprint(current), proposed, confirm, true});
+    } else if (cmd == QLatin1String("settings") && args.size() >= 4) {
+        action = QStringLiteral("writesettings");
+        settings::Settings st;
+        st.keepBackups = args.at(2).toInt();
+        st.ntfsDriver = args.at(3);
+        request = requests::encodeSettings(st);
     } else if (cmd == QLatin1String("restore")) {
         action = QStringLiteral("restorebackup");
         request = requests::encodeRestore({args.at(2), confirm});
@@ -194,7 +201,8 @@ int main(int argc, char *argv[])
     const QHash<QString, client::Action> actions = {{QStringLiteral("writefstab"), client::Action::WriteFstab},
                                                     {QStringLiteral("addsharedmount"), client::Action::AddSharedMount},
                                                     {QStringLiteral("removesharedmount"), client::Action::RemoveSharedMount},
-                                                    {QStringLiteral("restorebackup"), client::Action::RestoreBackup}};
+                                                    {QStringLiteral("restorebackup"), client::Action::RestoreBackup},
+                                                    {QStringLiteral("writesettings"), client::Action::WriteSettings}};
     const client::Reply reply = client::runBlocking(actions.value(action), request);
     if (!reply.ok()) {
         QString message = reply.message;
