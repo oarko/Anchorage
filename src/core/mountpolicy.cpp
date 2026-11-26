@@ -271,6 +271,22 @@ Plan planFstabWrite(QByteArrayView current, QByteArrayView proposed, const Calle
             plan.errors.append(QStringLiteral("Only driveadmins or administrators can add or change the system entry for %1.").arg(e.mountPoint));
             continue;
         }
+        // Bind entries: what they show must come from a usual place, or from inside another
+        // entry's drive; anything else (system folders) is for driveadmins/sudo (SPEC §6).
+        if ((hasOption(e, QStringLiteral("bind")) || hasOption(e, QStringLiteral("rbind"))) && !caller.fullAccess()) {
+            bool allowed = checkPathSyntax(e.spec).isEmpty() && classifyMountPoint(e.spec, extraBlocked).zone == Zone::Safe;
+            for (const Entry &n : newEntries) {
+                if (allowed) {
+                    break;
+                }
+                const bool inside = n.mountPoint != QLatin1String("/") && (e.spec == n.mountPoint || e.spec.startsWith(n.mountPoint + QLatin1Char('/')));
+                allowed = inside && !(n == e) && !isSystemEntry(n, rootSpecs) && n.type != QLatin1String("swap") && checkPathSyntax(e.spec).isEmpty();
+            }
+            if (!allowed) {
+                plan.errors.append(QStringLiteral("Only driveadmins or administrators can show %1 at another place.").arg(e.spec));
+                continue;
+            }
+        }
         if (isSwapMountPoint(e) || oldMountPoints.contains(e.mountPoint)) {
             continue; // editing an existing mount point, or swap: no new location to check
         }

@@ -128,6 +128,16 @@ MountPlan planMountEntry(QByteArrayView fstabData, const QString &mountPoint, co
         return plan;
     }
     plan.method = isAutomount(*entry) ? Method::Systemd : Method::MountCommand;
+    // mount ignores x-systemd.requires-mounts-for: without this check a bind entry would
+    // show the drive's empty folder when the drive isn't mounted. (systemd checks it itself.)
+    if (plan.method == Method::MountCommand) {
+        static const QString requires_ = QStringLiteral("x-systemd.requires-mounts-for=");
+        for (const QString &o : entry->options) {
+            if (o.startsWith(requires_) && !mountedAt(current, o.mid(requires_.size()))) {
+                plan.errors.append(QStringLiteral("Mount %1 first: %2 shows what is on it.").arg(o.mid(requires_.size()), mountPoint));
+            }
+        }
+    }
     return plan;
 }
 

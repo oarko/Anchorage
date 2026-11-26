@@ -21,7 +21,7 @@ import time
 
 import subprocess
 
-from e2e_scenarios import PASSWORDS, VM, Console, backups, check, create_users, results, ssh, vm_fstab
+from e2e_scenarios import PASSWORDS, VM, Console, backups, check, create_users, put_file, results, ssh, vm_fstab
 
 IMAGES = {  # label: (mkfs, size)
     "E2EBOOT": ("mkfs.ext4 -q -F -L E2EBOOT", "64M"),
@@ -36,6 +36,10 @@ def setup_images():
     for label, (mkfs, size) in IMAGES.items():
         img = f"/var/lib/anchorage-e2e/{label}.img"
         lines += [f"sudo truncate -s {size} {img}", f"sudo {mkfs} {img} >/dev/null"]
+    # A folder with a marker file on the start-up drive, for the bind scenarios.
+    lines += ["sudo mkdir -p /tmp/e2e-prep", "sudo mount -o loop /var/lib/anchorage-e2e/E2EBOOT.img /tmp/e2e-prep",
+              "sudo mkdir -p /tmp/e2e-prep/data", "echo on-the-drive | sudo tee /tmp/e2e-prep/data/marker >/dev/null",
+              "sudo umount /tmp/e2e-prep"]
     attach = " ".join(f"/var/lib/anchorage-e2e/{l}.img" for l in IMAGES)
     unit = f"""[Unit]
 Description=Attach Anchorage e2e disk images
@@ -108,7 +112,8 @@ def main():
     # ---- dana (driveadmins) builds entries the way the editor does -------------------
     con.login("dana")
     before = len(backups())
-    res, prompts = con.run(f"edit UUID={uuids['E2EBOOT']} /mnt/e2e-boot ext4 boot admins", "dana", PASSWORDS["dana"])
+    res, prompts = con.run(f"edit UUID={uuids['E2EBOOT']} /mnt/e2e-boot ext4 boot admins bind=/srv/e2e-bind bind=/srv/e2e-data:data",
+                           "dana", PASSWORDS["dana"])
     line = line_for("/mnt/e2e-boot")
     check("dana adds a drive mounted at start-up (editor default: nofail)",
           res.startswith("RESULT ok") and line.split()[3:4] == ["nofail"] and prompts == ["password"]
@@ -129,7 +134,7 @@ def main():
     check("dana adds a drive mounted when its folder is opened", res.startswith("RESULT ok")
           and opts(line_for("/mnt/e2e-auto")) == {"nofail", "noauto", "x-systemd.automount"}, res)
 
-    res, _ = con.run(f"edit UUID={MISSING_UUID} /mnt/e2e-missing ext4 boot admins opt=x-systemd.device-timeout=5s",
+    res, _ = con.run(f"edit UUID={MISSING_UUID} /mnt/e2e-missing ext4 boot admins opt=x-systemd.device-timeout=5s bind=/srv/e2e-missing-bind",
                      "dana", PASSWORDS["dana"])
     check("dana adds a drive that isn't connected (nofail, 5 s device timeout)", res.startswith("RESULT ok"), res)
 
@@ -158,7 +163,7 @@ def main():
     res, _ = con.run(f"edit UUID={uuids['E2EFAT']} /mnt/e2e-fat vfat request users", "dana", PASSWORDS["dana"])
     line = line_for("/mnt/e2e-fat")
     check("dana changes it to 'anyone can unmount' (only that option changes)",
-          res.startswith("RESULT ok") and line == fat_line.replace(",user,", ",users,"), f"{res} {line!r} was {fat_line!r}")
+          res.startswith("RESULT ok") and line.split() == fat_line.replace(",user,", ",users,").split(), f"{res} {line!r} was {fat_line!r}")
     con.logout()
     rc1, _ = as_user("alice", "mount /mnt/e2e-fat")
     rc2, out = as_user("nora", "umount /mnt/e2e-fat")
@@ -166,6 +171,10 @@ def main():
 
     # ---- a standard user with an administrator's password -----------------------------
     con.login("alice")
+    f = put_file("alice", "bind-etc", vm_fstab() + "/etc /mnt/e2e-etc none bind,nofail 0 0\n")
+    res, _ = con.run(f"write {f} --create", "sam", PASSWORDS["sam"])
+    check("alice can't show a system folder (/etc) elsewhere, even with sam's password",
+          res.startswith("RESULT error") and "/mnt/e2e-etc" not in vm_fstab(), res)
     res, prompts = con.run("edit tmpfs /mnt/e2e-alice tmpfs request admins", "sam", PASSWORDS["sam"])
     check("alice adds an entry with sam's (administrator) password", res.startswith("RESULT ok") and "/mnt/e2e-alice" in vm_fstab()
           and prompts[:1] == ["identity:sam,test"], f"{res} {prompts}")
@@ -177,6 +186,11 @@ def main():
     state = ssh("systemctl is-system-running").stdout.strip()
     check("system state is running or degraded, not emergency/maintenance", state in ("running", "degraded"), state)
     check("the start-up drive is mounted", fs_at("/mnt/e2e-boot") == "ext4", fs_at("/mnt/e2e-boot"))
+    check("its binds show the drive: the whole drive and a folder on it",
+          ssh("cat /srv/e2e-bind/data/marker").stdout.strip() == "on-the-drive" and ssh("cat /srv/e2e-data/marker").stdout.strip() == "on-the-drive",
+          ssh("findmnt /srv/e2e-bind; findmnt /srv/e2e-data").stdout)
+    check("the missing drive's bind stays unmounted (no empty folder shown in its place)",
+          fs_at("/srv/e2e-missing-bind") == "", ssh("findmnt /srv/e2e-missing-bind").stdout)
     check("the 'only when asked' drive is not mounted", fs_at("/mnt/e2e-fat") == "", fs_at("/mnt/e2e-fat"))
     check("the missing drive's mount simply didn't happen", unit_state("/mnt/e2e-missing") in ("inactive", "failed")
           and fs_at("/mnt/e2e-missing") == "", unit_state("/mnt/e2e-missing"))

@@ -56,6 +56,22 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             if (isSystemEntry(e) && !caller.fullAccess()) {
                 fail();
             }
+            // Binds by everyone else show only folders from the usual places or inside other
+            // entries' drives; never a protected system folder.
+            if ((e.options.contains(QStringLiteral("bind")) || e.options.contains(QStringLiteral("rbind"))) && !caller.fullAccess()
+                && classifyMountPoint(e.spec).zone == Zone::Blocked) {
+                bool insideEntry = false;
+                const fstab::File pf = fstab::File::parse(proposed);
+                for (const int i : pf.entryLines()) {
+                    const auto &n = pf.lines().at(static_cast<std::size_t>(i)).entry;
+                    insideEntry = insideEntry
+                        || (n && !(*n == e) && n->mountPoint != QLatin1String("/") && !isSystemEntry(*n)
+                            && (e.spec == n->mountPoint || e.spec.startsWith(n->mountPoint + QLatin1Char('/'))));
+                }
+                if (!insideEntry) {
+                    fail();
+                }
+            }
         }
         for (const fstab::Entry &e : plan.removed) {
             if (isSystemEntry(e) && !caller.fullAccess()) {
