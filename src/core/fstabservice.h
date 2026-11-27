@@ -78,12 +78,18 @@ struct MountOutcome {
     QStringList errors;
     QStringList createdDirs;
     QStringList processes; // when unmounting failed because the drive is in use
+    QStringList done; // list requests: the mount points handled before the failure (or all)
+    QString failed; // list requests: the one that failed
     bool ok() const { return errors.isEmpty(); }
 };
 
 MountOutcome mountEntry(const Paths &paths, const Caller &caller, const QString &mountPoint, const Runner &run);
 MountOutcome mountTemporary(const Paths &paths, const Caller &caller, const fstab::Entry &entry, bool confirmProtected, const Runner &run);
 MountOutcome unmount(const Paths &paths, const Caller &caller, const QString &mountPoint, bool confirmSystem, const Runner &run);
+// The helper's list actions: each mount point in order (a drive, then its binds; or the
+// binds, then the drive), each checked by the same rules, stopping at the first failure.
+MountOutcome mountEntries(const Paths &paths, const Caller &caller, const QStringList &mountPoints, const Runner &run);
+MountOutcome unmountAll(const Paths &paths, const Caller &caller, const QStringList &mountPoints, bool confirmSystem, const Runner &run);
 
 // Names of the programs with a file, folder or working directory on the file system
 // mounted at `path` (sorted, no duplicates). Reads `procRoot` (/proc).

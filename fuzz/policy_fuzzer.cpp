@@ -6,6 +6,8 @@
 #include "mountplan.h"
 #include "requests.h"
 
+#include <QSet>
+
 #include <cstdint>
 
 using namespace anchorage;
@@ -175,6 +177,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         // Requests survive encoding/decoding unchanged (the decoder refuses over 64 options).
         const auto decoded = requests::decodeEntry(requests::encodeEntry(requested));
         if (requested.options.size() <= 64 ? (!decoded || *decoded != requested) : decoded.ok()) {
+            fail();
+        }
+        // Mount point lists (mountentry, unmount): accepted exactly when 1..kMaxMountPoints
+        // entries without repeats, and then unchanged. The options stand in for a list.
+        const QStringList list = requested.options;
+        const bool valid = !list.isEmpty() && list.size() <= requests::kMaxMountPoints && QSet<QString>(list.cbegin(), list.cend()).size() == list.size();
+        const auto points = requests::decodeMountPoints(requests::encodeMountPoints(list));
+        const auto unList = requests::decodeUnmount(requests::encodeUnmount({list, true}));
+        if (valid != points.ok() || valid != unList.ok() || (valid && (*points != list || unList->mountPoints != list || !unList->confirmSystem))) {
             fail();
         }
     }

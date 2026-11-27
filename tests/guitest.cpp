@@ -141,16 +141,24 @@ public:
     QList<verify::Finding> verify(const QByteArray &) override { return findings; }
 
     // Mounting: recorded, and reflected in what load() reports.
-    void mountEntry(const QString &mountPoint, QWidget *, Done done) override
+    // Like the helper: in order, one request, stopping at the first failure.
+    void mountEntry(const QStringList &mountPoints, QWidget *, Done done) override
     {
-        calls.append(QStringLiteral("mount:") + mountPoint);
+        calls.append(QStringLiteral("mount:") + mountPoints.join(QLatin1Char('+')));
         client::Reply r;
-        if (failMount.contains(mountPoint)) {
-            r.message = QStringLiteral("mount: %1: can't find the device.").arg(mountPoint);
-        } else {
-            r.status = client::Reply::Status::Ok;
+        r.status = client::Reply::Status::Ok;
+        QStringList handled;
+        for (const QString &mountPoint : mountPoints) {
+            if (failMount.contains(mountPoint)) {
+                r.status = client::Reply::Status::Failed;
+                r.message = QStringLiteral("mount: %1: can't find the device.").arg(mountPoint);
+                r.data.insert(QStringLiteral("failed"), mountPoint);
+                break;
+            }
             setMounted(mountPoint, true);
+            handled.append(mountPoint);
         }
+        r.data.insert(QStringLiteral("done"), handled);
         done(r);
     }
     void mountTemporary(const requests::TemporaryMount &request, QWidget *, Done done) override
@@ -164,16 +172,23 @@ public:
     }
     void unmount(const requests::Unmount &request, QWidget *, Done done) override
     {
-        calls.append(QStringLiteral("unmount:%1%2").arg(request.mountPoint, request.confirmSystem ? QStringLiteral(" (confirmed)") : QString()));
+        calls.append(QStringLiteral("unmount:%1%2").arg(request.mountPoints.join(QLatin1Char('+')), request.confirmSystem ? QStringLiteral(" (confirmed)") : QString()));
         client::Reply r;
-        if (busyTimes > 0) {
-            --busyTimes;
-            r.message = QStringLiteral("%1 is in use by: dolphin, bash.").arg(request.mountPoint);
-            r.data.insert(QStringLiteral("processes"), QStringList{QStringLiteral("bash"), QStringLiteral("dolphin")});
-        } else {
-            r.status = client::Reply::Status::Ok;
-            setMounted(request.mountPoint, false);
+        r.status = client::Reply::Status::Ok;
+        QStringList handled;
+        for (const QString &mountPoint : request.mountPoints) {
+            if (busyTimes > 0 && (busyAt.isEmpty() || busyAt == mountPoint)) {
+                --busyTimes;
+                r.status = client::Reply::Status::Failed;
+                r.message = QStringLiteral("%1 is in use by: dolphin, bash.").arg(mountPoint);
+                r.data.insert(QStringLiteral("processes"), QStringList{QStringLiteral("bash"), QStringLiteral("dolphin")});
+                r.data.insert(QStringLiteral("failed"), mountPoint);
+                break;
+            }
+            setMounted(mountPoint, false);
+            handled.append(mountPoint);
         }
+        r.data.insert(QStringLiteral("done"), handled);
         done(r);
     }
     void writeCredentials(const requests::Credentials &request, QWidget *, Done done) override
@@ -244,6 +259,7 @@ public:
     QStringList calls;
     QStringList failMount;
     int busyTimes = 0;
+    QString busyAt; // only this mount point is busy (empty: the first one)
     QList<requests::TemporaryMount> temporary;
     QList<mounts::Mount> mountedNow;
     QStringList unmounted;
@@ -1129,6 +1145,104 @@ private Q_SLOTS:
         bar->actions().first()->trigger();
         QCOMPARE(src->calls, QStringList({QStringLiteral("unmount:/mnt/win"), QStringLiteral("mount:/mnt/win")}));
         QVERIFY(!bar->isVisibleTo(&w));
+    }
+
+    // SPEC §8: Mount and Unmount on a drive include its binds, in one request each (one
+    // password prompt): the drive first when mounting, the binds first when unmounting.
+    void mountAndUnmountIncludeTheBinds()
+    {
+        const QByteArray fstab = "UUID=0000000000000003 /mnt/win ntfs3 nofail 0 0\n"
+                                 "/mnt/win /srv/win none bind,nofail,x-systemd.requires=/mnt/win,x-systemd.requires-mounts-for=/mnt/win 0 0\n"
+                                 "/mnt/win/Users /media/win-users none bind,nofail,x-systemd.requires=/mnt/win,x-systemd.requires-mounts-for=/mnt/win 0 0\n";
+        auto *src = new FixtureSource(true, fstab);
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectTile(w, QStringLiteral("win"));
+        w.mountSelected();
+        QCoreApplication::processEvents();
+        QCOMPARE(src->calls, QStringList{QStringLiteral("mount:/mnt/win+/srv/win+/media/win-users")});
+
+        // The second bind is in use: the first is already unmounted, Try Again does the rest.
+        src->calls.clear();
+        selectTile(w, QStringLiteral("win"));
+        src->busyTimes = 1;
+        src->busyAt = QStringLiteral("/media/win-users");
+        bool retried = false;
+        clickInNextDialog(QStringLiteral("Try Again"), &retried);
+        QSignalSpy finished(&w, &MainWindow::mountFinished);
+        w.unmountSelected();
+        QVERIFY(retried);
+        QCOMPARE(src->calls, QStringList({QStringLiteral("unmount:/srv/win+/media/win-users+/mnt/win"), QStringLiteral("unmount:/media/win-users+/mnt/win")}));
+        QCOMPARE(finished.count(), 1);
+        QVERIFY(finished.at(0).at(0).toBool());
+
+        // A bind that can't be mounted: the drive still is, and the message says which failed.
+        src->calls.clear();
+        src->failMount.append(QStringLiteral("/srv/win"));
+        selectTile(w, QStringLiteral("win"));
+        bool closed = false;
+        clickInNextDialog(QStringLiteral("OK"), &closed);
+        w.mountSelected();
+        QVERIFY(closed);
+        QCOMPARE(src->calls, QStringList{QStringLiteral("mount:/mnt/win+/srv/win+/media/win-users")});
+        QVERIFY(std::any_of(src->mountedNow.cbegin(), src->mountedNow.cend(), [](const mounts::Mount &m) { return m.target == QLatin1String("/mnt/win"); }));
+
+        // Only the binds that aren't mounted yet come along.
+        src->failMount.clear();
+        src->calls.clear();
+        src->setMounted(QStringLiteral("/mnt/win"), false);
+        src->setMounted(QStringLiteral("/srv/win"), true);
+        w.reload();
+        selectTile(w, QStringLiteral("win"));
+        w.mountSelected();
+        QCOMPARE(src->calls, QStringList{QStringLiteral("mount:/mnt/win+/media/win-users")});
+    }
+
+    void anyUserOnRequestCantHaveBinds()
+    {
+        auto *src = new FixtureSource(true, "UUID=0000000000000003 /mnt/win ntfs3 nofail 0 0\n"
+                                            "/mnt/win /srv/win none bind,nofail,x-systemd.requires=/mnt/win,x-systemd.requires-mounts-for=/mnt/win 0 0\n");
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectTile(w, QStringLiteral("win"));
+        EntryEditor *e = openEditor(w, [&w] { w.editSelected(); });
+        auto *issues = e->findChild<QLabel *>(QStringLiteral("editor.issues"));
+        e->findChild<QRadioButton *>(QStringLiteral("access.who.1"))->click(); // any user
+        e->findChild<QRadioButton *>(QStringLiteral("access.start.1"))->click(); // only when asked
+        QVERIFY(issues->text().contains(QLatin1String("other places this drive is shown at")));
+        QVERIFY(fstab::hasErrors(e->issues()));
+        e->findChild<QRadioButton *>(QStringLiteral("access.start.2"))->click(); // when opened: fine
+        QVERIFY(!issues->text().contains(QLatin1String("other places this drive is shown at")));
+        QVERIFY(!fstab::hasErrors(e->issues()));
+        e->findChild<QRadioButton *>(QStringLiteral("access.start.1"))->click();
+        e->findChild<QRadioButton *>(QStringLiteral("access.who.0"))->click(); // administrators only: fine
+        QVERIFY(!fstab::hasErrors(e->issues()));
+        e->reject();
+    }
+
+    void remountTakesTheBindsAlong()
+    {
+        const QByteArray fstab = "UUID=0000000000000003 /mnt/win ntfs3 nofail 0 0\n"
+                                 "/mnt/win /srv/win none bind,nofail,x-systemd.requires=/mnt/win,x-systemd.requires-mounts-for=/mnt/win 0 0\n";
+        auto *src = new FixtureSource(true, fstab);
+        src->setMounted(QStringLiteral("/mnt/win"), true);
+        src->setMounted(QStringLiteral("/srv/win"), true);
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectTile(w, QStringLiteral("win"));
+        EntryEditor *e = openEditor(w, [&w] { w.editSelected(); });
+        advancedRow(e, QStringLiteral("noatime"))->setCheckState(0, Qt::Checked);
+        e->accept();
+        QCoreApplication::processEvents();
+        w.applyChanges();
+        auto *bar = w.findChild<KMessageWidget *>(QStringLiteral("remountBar"));
+        QVERIFY(bar->isVisibleTo(&w));
+        src->calls.clear();
+        bar->actions().first()->trigger();
+        QCOMPARE(src->calls, QStringList({QStringLiteral("unmount:/srv/win+/mnt/win"), QStringLiteral("mount:/mnt/win+/srv/win")}));
     }
 
     void bindsAreSavedWithTheDrive()

@@ -936,6 +936,21 @@ MainWindow::MountChoices MainWindow::mountChoices(const inventory::Item &item) c
     return c;
 }
 
+QStringList MainWindow::bindsOf(const fstab::Entry &drive, bool mounted) const
+{
+    QStringList out;
+    if (binds::isBind(drive)) {
+        return out;
+    }
+    const fstab::File file = fstab::File::parse(m_snapshot.fstab); // what the helper reads
+    for (const auto &[line, b] : binds::findFor(file, drive.mountPoint)) {
+        if ((mounting::mountedAt(m_snapshot.mounts, b.target) != nullptr) == mounted && !out.contains(b.target)) {
+            out.append(b.target);
+        }
+    }
+    return out;
+}
+
 void MainWindow::mountSelected()
 {
     const auto *it = selectedItem();
@@ -946,26 +961,66 @@ void MainWindow::mountSelected()
     const MountChoices mc = mountChoices(item);
     const QString mp = item.entry->mountPoint;
     const QString fsType = item.entry->type;
-    const auto done = [this, mp, fsType](const client::Reply &reply) {
-        if (reply.ok()) {
-            statusBar()->showMessage(i18n("Mounted %1.", mp), 8000);
-            reload();
-        } else {
-            client::Reply explained = reply;
-            const QString why = mounterrors::explain(fsType, reply.message);
-            if (!why.isEmpty()) {
-                explained.message += QStringLiteral("\n\n") + why;
-            }
-            showHelperError(explained, i18n("%1 was not mounted.", mp));
+    // Its binds come along, after the drive (SPEC §8).
+    const QStringList extra = bindsOf(*item.entry, false);
+    const auto failed = [this, mp, fsType](const client::Reply &reply) {
+        const QString which = reply.data.value(QStringLiteral("failed")).toString();
+        const bool driveDone = reply.data.value(QStringLiteral("done")).toStringList().contains(mp);
+        client::Reply explained = reply;
+        const QString why = mounterrors::explain(which.isEmpty() || which == mp ? fsType : QStringLiteral("none"), reply.message);
+        if (!why.isEmpty()) {
+            explained.message += QStringLiteral("\n\n") + why;
         }
-        Q_EMIT mountFinished(reply.ok());
+        showHelperError(explained, driveDone && !which.isEmpty() ? i18n("%1 was mounted, but %2 was not.", mp, which) : i18n("%1 was not mounted.", mp));
     };
-    const auto run = [this, mc, mp, done] {
+    const auto mounted = [this, mp, extra] {
+        statusBar()->showMessage(extra.isEmpty() ? i18n("Mounted %1.", mp)
+                                                 : i18np("Mounted %2, and it is shown at %3 too.", "Mounted %2, and it is shown at %1 more places.",
+                                                         int(extra.size()), mp, extra.value(0)),
+                                 8000);
+    };
+    const auto finish = [this](bool ok) {
+        reload();
+        Q_EMIT mountFinished(ok);
+    };
+    const auto run = [this, mc, mp, extra, failed, mounted, finish] {
         statusBar()->showMessage(i18n("Mounting %1…", mp));
-        if (mc.mount == Route::AsUser) {
-            m_source->userMount(mp, true, done);
-        } else if (mc.mount == Route::Helper) {
-            m_source->mountEntry(mp, this, done);
+        if (mc.mount == Route::Helper) {
+            m_source->mountEntry(QStringList{mp} + extra, this, [failed, mounted, finish](const client::Reply &reply) {
+                if (reply.ok()) {
+                    mounted();
+                } else {
+                    failed(reply);
+                }
+                finish(reply.ok());
+            });
+        } else if (mc.mount == Route::AsUser) {
+            m_source->userMount(mp, true, [this, mp, extra, failed, mounted, finish](const client::Reply &reply) {
+                if (!reply.ok()) {
+                    failed(reply);
+                    finish(false);
+                    return;
+                }
+                if (extra.isEmpty()) {
+                    mounted();
+                    finish(true);
+                    return;
+                }
+                // Binds aren't "any user" entries: they go through the helper.
+                m_source->mountEntry(extra, this, [mp, failed, mounted, finish](const client::Reply &r) {
+                    if (r.ok()) {
+                        mounted();
+                    } else {
+                        client::Reply partial = r;
+                        partial.data.insert(QStringLiteral("done"), QStringList{mp} + r.data.value(QStringLiteral("done")).toStringList());
+                        if (partial.data.value(QStringLiteral("failed")).toString().isEmpty()) {
+                            partial.data.insert(QStringLiteral("failed"), i18n("its other places"));
+                        }
+                        failed(partial);
+                    }
+                    finish(r.ok());
+                });
+            });
         }
     };
     ensureClientTools({item.entry->type}, run);
@@ -994,44 +1049,82 @@ void MainWindow::unmountSelected()
         }
         confirm = true;
     }
-    runUnmount(item, mc.unmount, confirm);
+    // Its binds go first (SPEC §8): a bind left behind would keep showing the drive.
+    UnmountJob job;
+    job.confirmSystem = confirm;
+    job.viaHelper = item.entry && item.mountedAt == item.entry->mountPoint ? bindsOf(*item.entry, true) : QStringList();
+    if (mc.unmount == Route::AsUser) {
+        job.asUser = item.mountedAt;
+    } else {
+        job.viaHelper.append(item.mountedAt);
+    }
+    runUnmount(job);
 }
 
-void MainWindow::runUnmount(const inventory::Item &item, Route route, bool confirmSystem)
+void MainWindow::runUnmount(const UnmountJob &job)
 {
-    const QString target = item.mountedAt;
-    const auto done = [this, item, route, confirmSystem, target](const client::Reply &reply) {
+    const QString name = job.asUser.isEmpty() ? job.viaHelper.constLast() : job.asUser;
+    const auto succeeded = [this, name] {
+        statusBar()->showMessage(i18n("Unmounted %1.", name), 8000);
+        reload();
+        Q_EMIT mountFinished(true);
+    };
+    const auto asUser = [this, job, succeeded] {
+        m_source->userMount(job.asUser, false, [this, job, succeeded](const client::Reply &reply) {
+            if (reply.ok()) {
+                succeeded();
+            } else {
+                unmountFailed(reply, job.asUser, UnmountJob{{}, job.asUser, job.confirmSystem});
+            }
+        });
+    };
+    statusBar()->showMessage(i18n("Unmounting %1…", name));
+    if (job.viaHelper.isEmpty()) {
+        asUser();
+        return;
+    }
+    m_source->unmount({job.viaHelper, job.confirmSystem}, this, [this, job, succeeded, asUser](const client::Reply &reply) {
         if (reply.ok()) {
-            statusBar()->showMessage(i18n("Unmounted %1.", target), 8000);
-            reload();
-            Q_EMIT mountFinished(true);
+            if (job.asUser.isEmpty()) {
+                succeeded();
+            } else {
+                asUser();
+            }
             return;
         }
-        const QStringList programs = reply.data.value(QStringLiteral("processes")).toStringList();
-        const bool busy = !programs.isEmpty() || reply.data.value(QStringLiteral("busy")).toBool() || reply.message.contains(QLatin1String("in use"));
-        if (busy && reply.status == client::Reply::Status::Failed) {
-            statusBar()->clearMessage();
-            const QString text = programs.isEmpty()
-                ? i18n("%1 is in use. Close the files and folders on it (and terminals open there), then try again.", target)
-                : i18n("%1 is in use by: <b>%2</b>.<br><br>Close them, or leave the folder in them, then try again.", target,
-                       programs.join(QStringLiteral(", ")).toHtmlEscaped());
-            if (KMessageBox::warningTwoActions(this, text, i18n("Drive in Use"), KGuiItem(i18n("Try Again"), QStringLiteral("view-refresh")),
-                                               KStandardGuiItem::cancel())
-                == KMessageBox::PrimaryAction) {
-                runUnmount(item, route, confirmSystem);
-                return;
-            }
-        } else {
-            showHelperError(reply, i18n("%1 was not unmounted.", target));
+        // Try again with what is left: the ones before the failure are already unmounted.
+        UnmountJob rest = job;
+        for (const QString &done : reply.data.value(QStringLiteral("done")).toStringList()) {
+            rest.viaHelper.removeAll(done);
         }
-        Q_EMIT mountFinished(false);
-    };
-    statusBar()->showMessage(i18n("Unmounting %1…", target));
-    if (route == Route::AsUser) {
-        m_source->userMount(target, false, done);
-    } else {
-        m_source->unmount({target, confirmSystem}, this, done);
+        const QString failed = reply.data.value(QStringLiteral("failed")).toString();
+        unmountFailed(reply, failed.isEmpty() ? job.viaHelper.constFirst() : failed, rest);
+    });
+}
+
+void MainWindow::unmountFailed(const client::Reply &reply, const QString &target, const UnmountJob &retry)
+{
+    if (!reply.data.value(QStringLiteral("done")).toStringList().isEmpty()) {
+        reload(); // some places were unmounted
     }
+    const QStringList programs = reply.data.value(QStringLiteral("processes")).toStringList();
+    const bool busy = !programs.isEmpty() || reply.data.value(QStringLiteral("busy")).toBool() || reply.message.contains(QLatin1String("in use"));
+    if (busy && reply.status == client::Reply::Status::Failed) {
+        statusBar()->clearMessage();
+        const QString text = programs.isEmpty()
+            ? i18n("%1 is in use. Close the files and folders on it (and terminals open there), then try again.", target)
+            : i18n("%1 is in use by: <b>%2</b>.<br><br>Close them, or leave the folder in them, then try again.", target,
+                   programs.join(QStringLiteral(", ")).toHtmlEscaped());
+        if (KMessageBox::warningTwoActions(this, text, i18n("Drive in Use"), KGuiItem(i18n("Try Again"), QStringLiteral("view-refresh")),
+                                           KStandardGuiItem::cancel())
+            == KMessageBox::PrimaryAction) {
+            runUnmount(retry);
+            return;
+        }
+    } else {
+        showHelperError(reply, i18n("%1 was not unmounted.", target));
+    }
+    Q_EMIT mountFinished(false);
 }
 
 void MainWindow::mountAtSelected()
@@ -1150,7 +1243,7 @@ void MainWindow::testMount(const QList<fstab::Entry> &entries, const QString &ba
         }
         const fstab::Entry e = state->left.takeFirst();
         statusBar()->showMessage(i18n("Test mounting %1…", e.mountPoint));
-        m_source->mountEntry(e.mountPoint, this, [this, state, step, e](const client::Reply &reply) {
+        m_source->mountEntry({e.mountPoint}, this, [this, state, step, e](const client::Reply &reply) {
             if (!reply.ok()) {
                 const QString why = mounterrors::explain(e.type, reply.message);
                 state->failures.append(QStringLiteral("%1: %2%3").arg(e.mountPoint, reply.message, why.isEmpty() ? QString() : QStringLiteral(" — ") + why));
@@ -1161,7 +1254,7 @@ void MainWindow::testMount(const QList<fstab::Entry> &entries, const QString &ba
                 (*step)(); // it mounts at start-up anyway: leave it mounted
                 return;
             }
-            m_source->unmount({e.mountPoint, false}, this, [state, step, e](const client::Reply &r) {
+            m_source->unmount({{e.mountPoint}, false}, this, [state, step, e](const client::Reply &r) {
                 if (!r.ok()) {
                     state->failures.append(QStringLiteral("%1 (unmounting after the test): %2").arg(e.mountPoint, r.message));
                 }
@@ -1175,24 +1268,61 @@ void MainWindow::testMount(const QList<fstab::Entry> &entries, const QString &ba
 void MainWindow::remountChanged()
 {
     m_remountBar->hide();
-    const QStringList targets = m_toRemount;
+    const QStringList drives = m_toRemount;
     m_toRemount.clear();
-    for (const QString &mp : targets) {
-        m_source->unmount({mp, false}, this, [this, mp](const client::Reply &reply) {
-            if (!reply.ok()) {
-                showHelperError(reply, i18n("%1 was not remounted.", mp));
-                return;
-            }
-            m_source->mountEntry(mp, this, [this, mp](const client::Reply &r) {
-                if (r.ok()) {
-                    statusBar()->showMessage(i18n("Remounted %1 with the new options.", mp), 8000);
-                    reload();
-                } else {
-                    showHelperError(r, i18n("%1 was unmounted but could not be mounted again.", mp));
-                }
-            });
-        });
+    if (drives.isEmpty()) {
+        return;
     }
+    // One request each way, so it asks for the password once (SPEC §8). Binds are taken
+    // down first and brought back after their drive, so they show the remounted drive.
+    const fstab::File file = fstab::File::parse(m_snapshot.fstab);
+    QStringList shownToo;
+    for (const QString &mp : drives) {
+        for (const int i : file.entryLines()) {
+            const auto &e = file.lines().at(static_cast<std::size_t>(i)).entry;
+            if (e && e->mountPoint == mp) {
+                for (const QString &b : bindsOf(*e, true)) {
+                    if (!shownToo.contains(b) && !drives.contains(b)) {
+                        shownToo.append(b);
+                    }
+                }
+                break;
+            }
+        }
+    }
+    const QStringList down = shownToo + drives;
+    const QStringList up = drives + shownToo;
+    statusBar()->showMessage(i18n("Remounting %1…", drives.join(QStringLiteral(", "))));
+    m_source->unmount({down, false}, this, [this, down, up](const client::Reply &reply) {
+        if (!reply.ok()) {
+            const QString failed = reply.data.value(QStringLiteral("failed")).toString();
+            const QStringList done = reply.data.value(QStringLiteral("done")).toStringList();
+            reload();
+            showHelperError(reply, i18n("%1 was not remounted.", failed.isEmpty() ? down.join(QStringLiteral(", ")) : failed));
+            if (!done.isEmpty()) {
+                // Bring back what was already taken down.
+                QStringList back;
+                for (const QString &mp : up) {
+                    if (done.contains(mp)) {
+                        back.append(mp);
+                    }
+                }
+                m_source->mountEntry(back, this, [this](const client::Reply &) {
+                    reload();
+                });
+            }
+            return;
+        }
+        m_source->mountEntry(up, this, [this, up](const client::Reply &r) {
+            if (r.ok()) {
+                statusBar()->showMessage(i18n("Remounted %1 with the new options.", up.join(QStringLiteral(", "))), 8000);
+            } else {
+                const QString failed = r.data.value(QStringLiteral("failed")).toString();
+                showHelperError(r, i18n("%1 was unmounted but could not be mounted again.", failed.isEmpty() ? up.join(QStringLiteral(", ")) : failed));
+            }
+            reload();
+        });
+    });
 }
 
 void MainWindow::movePasswords()

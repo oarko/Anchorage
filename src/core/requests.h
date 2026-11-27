@@ -24,8 +24,12 @@ struct TemporaryMount {
     bool confirmProtected = false;
 };
 
+// mountentry and unmount take a list, handled in order and stopping at the first failure,
+// so a drive and its binds need one request (and one password prompt). SPEC §8.
+inline constexpr int kMaxMountPoints = 64;
+
 struct Unmount {
-    QString mountPoint;
+    QStringList mountPoints;
     bool confirmSystem = false;
 };
 
@@ -41,6 +45,7 @@ Result<Restore> decodeRestore(const QVariantMap &args);
 Result<settings::Settings> decodeSettings(const QVariantMap &args); // writesettings
 Result<TemporaryMount> decodeTemporaryMount(const QVariantMap &args); // mounttemporary
 Result<Unmount> decodeUnmount(const QVariantMap &args); // unmount
+Result<QStringList> decodeMountPoints(const QVariantMap &args); // mountentry
 
 struct Credentials {
     QString server;
@@ -49,7 +54,6 @@ struct Credentials {
     QString domain;
 };
 Result<Credentials> decodeCredentials(const QVariantMap &args); // writecredentials
-// mountentry uses decodeMountPoint.
 
 // Builders used by the GUI side (and tests), so both ends agree on the keys.
 QVariantMap encodeWriteFstab(const WriteFstab &request);
@@ -59,6 +63,7 @@ QVariantMap encodeRestore(const Restore &request);
 QVariantMap encodeSettings(const settings::Settings &settings);
 QVariantMap encodeTemporaryMount(const TemporaryMount &request);
 QVariantMap encodeUnmount(const Unmount &request);
+QVariantMap encodeMountPoints(const QStringList &mountPoints);
 QVariantMap encodeCredentials(const Credentials &request);
 
 } // namespace anchorage::requests

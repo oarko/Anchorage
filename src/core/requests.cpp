@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "requests.h"
 
+#include <QSet>
+
 #include <QRegularExpression>
 
 namespace anchorage::requests
@@ -14,6 +16,7 @@ const QString kConfirm = QStringLiteral("confirmProtected");
 const QString kCreate = QStringLiteral("createMountPoints");
 const QString kSpec = QStringLiteral("spec");
 const QString kMountPoint = QStringLiteral("mountPoint");
+const QString kMountPoints = QStringLiteral("mountPoints");
 const QString kType = QStringLiteral("type");
 const QString kOptions = QStringLiteral("options");
 const QString kDump = QStringLiteral("dump");
@@ -161,16 +164,49 @@ Result<TemporaryMount> decodeTemporaryMount(const QVariantMap &args)
     return t;
 }
 
+namespace
+{
+// A non-empty list of at most kMaxMountPoints strings without repeats. The paths themselves
+// are checked by the mount rules, one by one.
+Result<QStringList> mountPointList(const QVariant &v)
+{
+    using R = Result<QStringList>;
+    if (!is(v, QMetaType::QStringList)) {
+        return R::failure(QStringLiteral("Request fields have the wrong type."));
+    }
+    const QStringList list = v.toStringList();
+    if (list.isEmpty() || list.size() > kMaxMountPoints) {
+        return R::failure(QStringLiteral("A request names 1 to %1 mount points.").arg(kMaxMountPoints));
+    }
+    if (QSet<QString>(list.cbegin(), list.cend()).size() != list.size()) {
+        return R::failure(QStringLiteral("A mount point is named twice."));
+    }
+    return list;
+}
+} // namespace
+
+Result<QStringList> decodeMountPoints(const QVariantMap &args)
+{
+    if (const QString e = checkKeys(args, {kMountPoints}); !e.isEmpty()) {
+        return Result<QStringList>::failure(e);
+    }
+    return mountPointList(args[kMountPoints]);
+}
+
 Result<Unmount> decodeUnmount(const QVariantMap &args)
 {
     using R = Result<Unmount>;
-    if (const QString e = checkKeys(args, {kMountPoint, kConfirmSystem}); !e.isEmpty()) {
+    if (const QString e = checkKeys(args, {kMountPoints, kConfirmSystem}); !e.isEmpty()) {
         return R::failure(e);
     }
-    if (!is(args[kMountPoint], QMetaType::QString) || !is(args[kConfirmSystem], QMetaType::Bool)) {
+    if (!is(args[kConfirmSystem], QMetaType::Bool)) {
         return R::failure(QStringLiteral("Request fields have the wrong type."));
     }
-    return Unmount{args[kMountPoint].toString(), args[kConfirmSystem].toBool()};
+    auto list = mountPointList(args[kMountPoints]);
+    if (!list) {
+        return R::failure(list.error());
+    }
+    return Unmount{*list, args[kConfirmSystem].toBool()};
 }
 
 Result<Credentials> decodeCredentials(const QVariantMap &args)
@@ -199,7 +235,12 @@ QVariantMap encodeTemporaryMount(const TemporaryMount &t)
 
 QVariantMap encodeUnmount(const Unmount &u)
 {
-    return {{kMountPoint, u.mountPoint}, {kConfirmSystem, u.confirmSystem}};
+    return {{kMountPoints, u.mountPoints}, {kConfirmSystem, u.confirmSystem}};
+}
+
+QVariantMap encodeMountPoints(const QStringList &mountPoints)
+{
+    return {{kMountPoints, mountPoints}};
 }
 
 QVariantMap encodeSettings(const settings::Settings &s)

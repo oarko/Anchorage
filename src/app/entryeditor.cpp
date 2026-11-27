@@ -1403,6 +1403,14 @@ QList<Issue> EntryEditor::issues() const
             warn(QStringLiteral("options"), i18n("This server doesn't offer NFS %1, so mounting will fail. Choose Automatic or a version it offers.", ver));
         }
     }
+    // The kernel refuses bind mounts by ordinary users ("must be superuser", util-linux
+    // 2.41.3, VM 2026-11-27), so "any user" + "only when asked" would mount the drive but
+    // leave its other places to an administrator. At start-up or when the folder is opened,
+    // systemd mounts both without a password. SPEC §8.
+    if (!binds().isEmpty() && s.who != access::Who::Admins && s.start == Start::OnRequest) {
+        error(QStringLiteral("binds"), i18n("Users can't mount the other places this drive is shown at themselves. Choose \"The first time someone "
+                                            "opens the folder\" (no password needed for anyone), or let only administrators mount it."));
+    }
     QStringList targets;
     for (const auto &b : binds()) {
         if (const QString e = binds::checkSubfolder(b.subfolder); !e.isEmpty()) {
