@@ -1,0 +1,10 @@
+#!/bin/sh
+# The groups come from debian/anchorage.sysusers (systemd-sysusers, added below by
+# debhelper). Nobody is added to them: see /usr/share/doc/anchorage/README.Debian.
+set -e
+
+. /usr/share/debconf/confmodule
+
+#DEBHELPER#
+
+exit 0

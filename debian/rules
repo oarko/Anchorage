@@ -1,0 +1,35 @@
+#!/usr/bin/make -f
+# Anchorage: debhelper + CMake (SPEC §12a).
+
+include /usr/share/dpkg/pkg-info.mk
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export QT_QPA_PLATFORM = offscreen
+
+# A "~beta"/"~rc" version is a beta build. CMake turns ANCHORAGE_BETA on from the same
+# version and stops if debian/changelog and CMakeLists.txt disagree.
+ifneq (,$(findstring ~beta,$(DEB_VERSION_UPSTREAM))$(findstring ~rc,$(DEB_VERSION_UPSTREAM)))
+  BETA = 1
+  # Testers should see Anchorage's own "Install" offer for the share tools.
+  ANCHORAGE_DEPENDS = -Vanchorage:Recommends= -Vanchorage:Suggests="cifs-utils, nfs-common"
+else
+  BETA = 0
+  ANCHORAGE_DEPENDS = -Vanchorage:Recommends="cifs-utils, nfs-common" -Vanchorage:Suggests=
+endif
+
+%:
+	dh $@ --buildsystem=cmake+ninja
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-DANCHORAGE_PACKAGE_VERSION=$(DEB_VERSION_UPSTREAM) \
+		-DANCHORAGE_WERROR=OFF \
+		-DBUILD_TESTING=ON
+
+override_dh_installdeb:
+	dh_installdeb
+	# The maintainer scripts need to know whether this is a beta (see anchorage.prerm).
+	sed -i 's/@ANCHORAGE_BETA@/$(BETA)/' debian/anchorage/DEBIAN/prerm
+
+override_dh_gencontrol:
+	dh_gencontrol -- $(ANCHORAGE_DEPENDS)

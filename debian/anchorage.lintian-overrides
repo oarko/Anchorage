@@ -1,0 +1,2 @@
+# KAuth (KDE Frameworks) runs helpers only from its own folder, /usr/lib/kf6/kauth/libexec.
+executable-in-usr-lib [usr/lib/kf6/kauth/libexec/anchorage-helper]

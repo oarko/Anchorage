@@ -15,7 +15,26 @@ set(APP_CONFIG_DIR  "/etc/anchorage")
 set(DRIVEADMIN_GROUP "driveadmins" CACHE STRING "Group allowed full fstab management")
 set(NETMOUNT_GROUP   "netmount"    CACHE STRING "Group allowed to mount network shares")
 
-project(Anchorage VERSION 0.1.0 LANGUAGES CXX)
+project(Anchorage VERSION 0.9.0 LANGUAGES CXX)
+
+# ---------------------------------------------------------------------------
+# Version and beta builds (SPEC §12a). The package version is PROJECT_VERSION plus a
+# pre-release suffix: "~beta1", "~rc1", or empty for a release. A "~beta"/"~rc" suffix
+# always turns ANCHORAGE_BETA on, so a beta can't ship as a release by mistake.
+# debian/rules passes ANCHORAGE_PACKAGE_VERSION from debian/changelog; it must match.
+# ---------------------------------------------------------------------------
+set(ANCHORAGE_VERSION_SUFFIX "~beta1" CACHE STRING "Pre-release suffix of the version (~betaN, ~rcN, or empty)")
+set(ANCHORAGE_VERSION "${PROJECT_VERSION}${ANCHORAGE_VERSION_SUFFIX}")
+option(ANCHORAGE_BETA "Beta build: launch warning and more logging" OFF)
+if(ANCHORAGE_VERSION MATCHES "~(beta|rc)" AND NOT ANCHORAGE_BETA)
+    message(NOTICE "Version ${ANCHORAGE_VERSION} is a pre-release: turning ANCHORAGE_BETA on")
+    set(ANCHORAGE_BETA ON CACHE BOOL "Beta build: launch warning and more logging" FORCE)
+endif()
+if(DEFINED ANCHORAGE_PACKAGE_VERSION AND NOT ANCHORAGE_PACKAGE_VERSION STREQUAL ANCHORAGE_VERSION)
+    message(FATAL_ERROR "debian/changelog says ${ANCHORAGE_PACKAGE_VERSION}, but CMakeLists.txt says ${ANCHORAGE_VERSION}: "
+                        "update project(VERSION) and ANCHORAGE_VERSION_SUFFIX, or the changelog")
+endif()
+message(STATUS "Anchorage ${ANCHORAGE_VERSION}, beta build: ${ANCHORAGE_BETA}")
 
 set(QT_MIN_VERSION "6.6.0")
 set(KF_MIN_VERSION "6.0.0")

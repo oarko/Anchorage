@@ -1,0 +1,60 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the anchorage package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: anchorage\n"
+"Report-Msgid-Bugs-To: anchorage@packages.debian.org\n"
+"POT-Creation-Date: 2026-11-27 19:24+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=CHARSET\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. Type: boolean
+#. Description
+#. Type: boolean
+#. Description
+#: ../anchorage.templates:1001 ../anchorage.templates:2001
+msgid "Delete Anchorage's saved logins, backups and settings?"
+msgstr ""
+
+#. Type: boolean
+#. Description
+#. Type: boolean
+#. Description
+#: ../anchorage.templates:1001 ../anchorage.templates:2001
+msgid ""
+"This beta of Anchorage is being removed. Its folder /etc/anchorage holds the "
+"logins saved for network shares, the backups of /etc/fstab and Anchorage's "
+"settings."
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../anchorage.templates:1001
+msgid ""
+"/etc/fstab itself is not changed: drives, binds and network shares that "
+"Anchorage added keep working without it."
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../anchorage.templates:2001
+msgid ""
+"${COUNT} network share(s) in /etc/fstab still use a login saved there. If "
+"you delete it, those shares will stop mounting until you add their logins "
+"again (or remove them from /etc/fstab)."
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../anchorage.templates:2001
+msgid "/etc/fstab itself is not changed."
+msgstr ""

@@ -9,9 +9,9 @@ mount it", "only the owner can open the files"). Anchorage writes the matching `
 line, checks it, backs up the old file and test-mounts the result. Every option is explained:
 the catalogue covers about 390 mount options for 21 file systems, including SMB and NFS.
 
-> **Status: alpha (technical preview).** The core works and is tested heavily, including
-> against real drives and real file servers in a test VM, but it has not been released or
-> packaged yet. Server discovery, "mount on login" and desktop integration are still to come
+> **Status: beta (0.9.0~beta1).** The core works and is tested heavily, including against
+> real drives and real file servers in a test VM, and there is a `.deb` for testers (see
+> [Installing the beta](#installing-the-beta-kubuntu-2604)). Server discovery, "mount on login" and desktop integration are still to come
 > (see [Roadmap](#roadmap)). Try it in a virtual machine, not on a computer you depend on.
 
 ## What works today
@@ -113,6 +113,42 @@ the catalogue covers about 390 mount options for 21 file systems, including SMB 
 
 The full design, including every agreed decision, is in [`docs/SPEC.md`](docs/SPEC.md).
 
+## Installing the beta (Kubuntu 26.04)
+
+> **This is a beta.** Anchorage changes system files such as `/etc/fstab`, and a mistake there
+> can stop a computer from starting. Try it in a virtual machine or on a computer you don't
+> depend on, never on production systems. It warns you about this at every start (you can
+> turn that off for each version).
+
+Download `anchorage_0.9.0~beta1_amd64.deb` from the GitHub release and install it with apt
+(which also installs the KDE libraries it needs):
+
+```sh
+sudo apt install ./anchorage_0.9.0~beta1_amd64.deb
+```
+
+Then open **Anchorage** from the application menu. As an administrator (a member of `sudo`) you
+can do everything with your own password. The package creates two empty groups for everyone
+else:
+
+```sh
+sudo adduser alice netmount      # may add network shares and save logins for them
+sudo adduser alice driveadmins   # may change everything (effectively root: be careful)
+```
+
+They need to log out and in again first.
+
+**Reporting a problem:** the beta logs what it does. Start it from a terminal (`anchorage`) to
+see the app's lines, and `journalctl -b | grep anchorage` shows the root helper's. Passwords
+are never logged. Please attach both to an issue at
+<https://github.com/oarko/Anchorage/issues>.
+
+**Uninstalling** (`sudo apt remove anchorage`) never changes `/etc/fstab`: drives, binds and
+shares that Anchorage added keep working without it. The beta asks whether to delete
+`/etc/anchorage` too (saved logins, backups, settings); it suggests keeping it when shares
+still use a saved login there, because they stop mounting without it. A release keeps the
+folder on remove, and `purge` deletes only the saved logins that nothing uses any more.
+
 ## Building (Kubuntu 26.04)
 
 ```sh
@@ -132,9 +168,13 @@ Use the `release` preset for a hardened, optimised build (`build/release`).
 
 Run from the build folder, Anchorage can show everything but can't change anything: the
 privileged helper and its polkit rules have to be installed for that
-(`sudo cmake --install build/release`). As this is alpha software, please do that in a virtual
-machine. The groups are not created automatically yet:
-`sudo groupadd driveadmins && sudo usermod -aG driveadmins <you>` (log out and in again).
+(`sudo cmake --install build/release`), or build the package. Please do either in a virtual
+machine.
+
+To build the `.deb` in a clean Ubuntu 26.04 container (needs only Docker) and check it with
+lintian: `packaging/build-deb.sh` (output in `build/deb`). The version comes from
+`debian/changelog` and must match `CMakeLists.txt`; a `~beta` or `~rc` version is always a
+beta build.
 
 ## Testing
 
@@ -151,7 +191,8 @@ Nothing in the test suite touches the real `/etc/fstab` or mounts of the compute
   mounting and a reboot (`tests/vm/editor.sh`), SMB and NFS options against real servers
   (`tests/vm/network.sh`), browsing, saving logins and mounting shares against Samba and NFS
   servers plus a real NAS (`tests/vm/shares.sh`), and real drives attached to the VM
-  (`tests/vm/realdrives_test.sh`).
+  (`tests/vm/realdrives_test.sh`), and the `.deb`: install, permissions against the packaged
+  helper, upgrade, and the uninstall rules (`tests/vm/package.sh`).
 
 These tests have corrected the option catalogue for kernel 7.0 and `mount.cifs`, and found
 real-world surprises that Anchorage now handles: `mount` reporting success for a missing

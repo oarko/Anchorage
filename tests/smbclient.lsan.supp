@@ -1,0 +1,5 @@
+# LeakSanitizer suppressions for tests that call libsmbclient.
+# smbc_new_context() opens Samba's debug log once per process (debug_set_logfile ->
+# talloc_strdup) and never frees the name. Not Anchorage's memory; every context we make
+# is freed with smbc_free_context().
+leak:debug_set_logfile

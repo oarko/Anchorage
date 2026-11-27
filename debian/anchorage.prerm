@@ -1,0 +1,50 @@
+#!/bin/sh
+# Removing a beta asks whether to delete /etc/anchorage (SPEC §12a). A release keeps it;
+# see postrm for what a release purge deletes. /etc/fstab is never touched.
+set -e
+
+BETA=@ANCHORAGE_BETA@ # replaced by debian/rules: 1 for a ~beta/~rc version
+CONFIG=/etc/anchorage
+CREDS=$CONFIG/credentials
+
+# Saved-login files that a line in /etc/fstab still names with credentials= (or cred=).
+logins_in_use() {
+    [ -d "$CREDS" ] && [ -r /etc/fstab ] || return 0
+    awk '$1 !~ /^#/ && NF >= 4 {
+            n = split($4, o, ",")
+            for (i = 1; i <= n; i++) if (o[i] ~ /^cred(entials)?=/) { sub(/^[^=]*=/, "", o[i]); print o[i] }
+        }' /etc/fstab |
+        while read -r f; do
+            case "$f" in "$CREDS"/*) [ -f "$f" ] && echo "$f" ;; esac
+        done | sort -u
+}
+
+if [ "$1" = remove ] && [ "$BETA" = 1 ] && [ -d "$CONFIG" ]; then
+    . /usr/share/debconf/confmodule
+    count=$(logins_in_use | wc -l)
+    if [ "$count" -gt 0 ]; then
+        q=anchorage/remove-config-in-use
+        db_subst $q COUNT "$count"
+    else
+        q=anchorage/remove-config
+    fi
+    # Ask every time, starting from the default (an earlier answer isn't reused).
+    db_reset $q
+    db_fset $q seen false
+    db_input high $q || true
+    db_go || true
+    db_get $q
+    # stdout belongs to debconf from here on: messages go to stderr.
+    if [ "$RET" = true ]; then
+        rm -rf "$CONFIG"
+        rm -f /etc/polkit-1/rules.d/60-anchorage.rules
+        echo "anchorage: deleted $CONFIG (saved logins, backups and settings)." >&2
+    else
+        echo "anchorage: kept $CONFIG." >&2
+    fi
+    db_stop
+fi
+
+#DEBHELPER#
+
+exit 0

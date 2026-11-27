@@ -22,8 +22,15 @@ endforeach()
 # Real mounts; skips unless run by tests/docker/run-mount-tests.sh (privileged container).
 ecm_add_test(mounttest.cpp LINK_LIBRARIES anchorage_core anchorage_hardening Qt6::Test)
 
-set_tests_properties(guitest PROPERTIES ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/guitest.lsan.supp:print_suppressions=0")
+# Offscreen: no windows on the desktop, and no Wayland client allocations that outlive the test.
+set_tests_properties(guitest PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/guitest.lsan.supp:print_suppressions=0")
 
 # Share listing (SMB through libsmbclient, NFS through showmount). The live part needs
 # ANCHORAGE_NAS_ENV; without it, it is skipped.
 ecm_add_test(sharestest.cpp LINK_LIBRARIES anchorage_client anchorage_hardening Qt6::Test)
+
+# Beta logging: default levels, and passwords never logged.
+ecm_add_test(loggingtest.cpp LINK_LIBRARIES anchorage_client anchorage_hardening Qt6::Test)
+foreach(t sharestest loggingtest)
+    set_tests_properties(${t} PROPERTIES ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/smbclient.lsan.supp:print_suppressions=0")
+endforeach()

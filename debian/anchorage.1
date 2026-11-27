@@ -1,0 +1,55 @@
+.TH ANCHORAGE 1 "November 2026" "Anchorage 0.9.0~beta1" "User Commands"
+.SH NAME
+anchorage \- manage drives, network shares and /etc/fstab on KDE Plasma
+.SH SYNOPSIS
+.B anchorage
+[\fIQt and KDE options\fR]
+.SH DESCRIPTION
+.B Anchorage
+shows the drives, folders shown in a second place (bind mounts) and SMB and
+NFS network shares that this computer knows about, and lets you mount them,
+unmount them and change how they are mounted. It edits
+.I /etc/fstab
+for you, explains each option in plain words, checks every change before saving
+it and keeps a backup of the file before each change.
+.PP
+Anchorage itself never runs as root. Changes to system files are made by
+.IR anchorage-helper ,
+which polkit starts as root after asking for a password.
+Members of the
+.B driveadmins
+group may make every change with their own password; members of
+.B netmount
+may add network shares and save logins for them. The package creates both
+groups but adds nobody to them; to give someone access, run for example
+.PP
+.RS
+sudo adduser alice netmount
+.RE
+.SH FILES
+.TP
+.I /etc/fstab
+The file Anchorage edits.
+.TP
+.I /etc/anchorage/backups/
+A copy of /etc/fstab from before each change.
+.TP
+.I /etc/anchorage/credentials/
+Saved logins for SMB shares, readable only by root.
+.TP
+.I /etc/anchorage/config
+Settings made in Anchorage.
+.SH ENVIRONMENT
+.TP
+.B QT_LOGGING_RULES
+Set to
+.B anchorage.*.info=true
+to log what Anchorage does, for a bug report. Beta versions log this by
+default. Passwords are never logged.
+.SH SEE ALSO
+.BR fstab (5),
+.BR mount (8),
+.BR mount.cifs (8),
+.BR nfs (5)
+.SH BUGS
+https://github.com/oarko/Anchorage/issues

@@ -1,0 +1,24 @@
+Template: anchorage/remove-config
+Type: boolean
+Default: true
+_Description: Delete Anchorage's saved logins, backups and settings?
+ This beta of Anchorage is being removed. Its folder /etc/anchorage holds
+ the logins saved for network shares, the backups of /etc/fstab and
+ Anchorage's settings.
+ .
+ /etc/fstab itself is not changed: drives, binds and network shares that
+ Anchorage added keep working without it.
+
+Template: anchorage/remove-config-in-use
+Type: boolean
+Default: false
+_Description: Delete Anchorage's saved logins, backups and settings?
+ This beta of Anchorage is being removed. Its folder /etc/anchorage holds
+ the logins saved for network shares, the backups of /etc/fstab and
+ Anchorage's settings.
+ .
+ ${COUNT} network share(s) in /etc/fstab still use a login saved there.
+ If you delete it, those shares will stop mounting until you add their
+ logins again (or remove them from /etc/fstab).
+ .
+ /etc/fstab itself is not changed.

@@ -2,6 +2,7 @@
 #include "datasource.h"
 
 #include "fstabservice.h"
+#include "logging.h"
 #include "packagekit.h"
 #include "paths.h"
 #include "safefs.h"
@@ -193,10 +194,12 @@ void SystemDataSource::userMount(const QString &mountPoint, bool mount, Done don
     // user/users options themselves.
     auto *p = new QProcess(this);
     p->setProcessChannelMode(QProcess::MergedChannels);
+    qCInfo(logging::mount).noquote() << (mount ? "Mounting" : "Unmounting") << mountPoint << "as the user (no helper)";
     connect(p, &QProcess::finished, this, [p, done = std::move(done)](int code, QProcess::ExitStatus status) {
         client::Reply r;
         r.status = (status == QProcess::NormalExit && code == 0) ? client::Reply::Status::Ok : client::Reply::Status::Failed;
         r.message = QString::fromUtf8(p->readAll()).trimmed();
+        qCInfo(logging::mount).noquote() << p->program() << p->arguments().join(QLatin1Char(' ')) << "exited with" << code << logging::scrub(r.message);
         if (r.message.contains(QLatin1String("busy"))) {
             r.data.insert(QStringLiteral("busy"), true);
         }
