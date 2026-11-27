@@ -172,9 +172,9 @@ QWindow *windowOf(QWidget *w)
 }
 } // namespace
 
-void SystemDataSource::mountEntry(const QString &mountPoint, QWidget *window, Done done)
+void SystemDataSource::mountEntry(const QStringList &mountPoints, QWidget *window, Done done)
 {
-    client::run(client::Action::MountEntry, requests::encodeMountPoint(mountPoint), windowOf(window), this, std::move(done));
+    client::run(client::Action::MountEntry, requests::encodeMountPoints(mountPoints), windowOf(window), this, std::move(done));
 }
 
 void SystemDataSource::mountTemporary(const requests::TemporaryMount &request, QWidget *window, Done done)

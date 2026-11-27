@@ -71,7 +71,8 @@ public:
     virtual void restoreBackup(const anchorage::requests::Restore &request, QWidget *window, Done done) = 0;
     virtual void writeSettings(const anchorage::settings::Settings &settings, QWidget *window, Done done) = 0;
     // Mounting through the helper (SPEC §6.1). Reply data: "processes" when in use.
-    virtual void mountEntry(const QString &mountPoint, QWidget *window, Done done) = 0;
+    // In order, stopping at the first failure (reply data "done", "failed").
+    virtual void mountEntry(const QStringList &mountPoints, QWidget *window, Done done) = 0;
     virtual void mountTemporary(const anchorage::requests::TemporaryMount &request, QWidget *window, Done done) = 0;
     virtual void unmount(const anchorage::requests::Unmount &request, QWidget *window, Done done) = 0;
     // Saves an SMB login as a root-only file (SPEC §11). Reply data: "path".
@@ -110,7 +111,7 @@ public:
     void writeFstab(const anchorage::requests::WriteFstab &request, QWidget *window, Done done) override;
     void restoreBackup(const anchorage::requests::Restore &request, QWidget *window, Done done) override;
     void writeSettings(const anchorage::settings::Settings &settings, QWidget *window, Done done) override;
-    void mountEntry(const QString &mountPoint, QWidget *window, Done done) override;
+    void mountEntry(const QStringList &mountPoints, QWidget *window, Done done) override;
     void mountTemporary(const anchorage::requests::TemporaryMount &request, QWidget *window, Done done) override;
     void unmount(const anchorage::requests::Unmount &request, QWidget *window, Done done) override;
     void userMount(const QString &mountPoint, bool mount, Done done) override;

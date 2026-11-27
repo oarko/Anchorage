@@ -239,6 +239,23 @@ private Q_SLOTS:
         QVERIFY2(o.errors.join(QString()).contains(QLatin1String("isn't connected")), qPrintable(o.errors.join(QLatin1Char(' '))));
         reallyMount = true;
 
+        // Lists (a drive and its binds): in order, stopping at the first failure, which is named.
+        write(paths.mountInfo, mountinfoBase);
+        const int beforeList = int(calls.size());
+        o = service::mountEntries(paths, standard, {QStringLiteral("/mnt/data"), QStringLiteral("/mnt/not-in-fstab"), QStringLiteral("/mnt/auto")}, fake);
+        QVERIFY(!o.ok());
+        QCOMPARE(o.done, QStringList{QStringLiteral("/mnt/data")});
+        QCOMPARE(o.failed, QStringLiteral("/mnt/not-in-fstab"));
+        QCOMPARE(int(calls.size()), beforeList + 1); // /mnt/auto was never tried
+        auto u = service::unmountAll(paths, standard, {QStringLiteral("/mnt/not-mounted"), QStringLiteral("/mnt/data")}, false, fake);
+        QVERIFY(!u.ok());
+        QVERIFY(u.done.isEmpty());
+        QCOMPARE(u.failed, QStringLiteral("/mnt/not-mounted"));
+        QFile info(paths.mountInfo);
+        QVERIFY(info.open(QIODevice::ReadOnly));
+        QVERIFY(mounting::mountedAt(mounts::parseMountInfo(info.readAll()), QStringLiteral("/mnt/data"))); // left alone
+        write(paths.mountInfo, mountinfoBase);
+
         // Automount entry: systemctl; on failure the journal's reason is shown.
         next = {1, QStringLiteral("Job failed")};
         o = service::mountEntry(paths, standard, QStringLiteral("/mnt/auto"), fake);
@@ -309,8 +326,22 @@ private Q_SLOTS:
         wrong[QStringLiteral("options")] = QStringLiteral("ro");
         QVERIFY(!requests::decodeTemporaryMount(wrong).ok());
 
-        const requests::Unmount u{QStringLiteral("/mnt/x"), true};
+        const requests::Unmount u{{QStringLiteral("/mnt/x/b"), QStringLiteral("/mnt/x")}, true};
         QCOMPARE(requests::decodeUnmount(requests::encodeUnmount(u))->confirmSystem, true);
+        QCOMPARE(requests::decodeUnmount(requests::encodeUnmount(u))->mountPoints, u.mountPoints);
+        // Lists: 1 to kMaxMountPoints, no repeats, strings only.
+        QCOMPARE(*requests::decodeMountPoints(requests::encodeMountPoints({QStringLiteral("/a"), QStringLiteral("/b")})),
+                 QStringList({QStringLiteral("/a"), QStringLiteral("/b")}));
+        QVERIFY(!requests::decodeMountPoints(requests::encodeMountPoints({})).ok());
+        QVERIFY(!requests::decodeMountPoints(requests::encodeMountPoints({QStringLiteral("/a"), QStringLiteral("/a")})).ok());
+        QStringList many;
+        for (int i = 0; i <= requests::kMaxMountPoints; ++i) {
+            many.append(QStringLiteral("/mnt/%1").arg(i));
+        }
+        QVERIFY(!requests::decodeMountPoints(requests::encodeMountPoints(many)).ok());
+        QVERIFY(!requests::decodeMountPoints({{QStringLiteral("mountPoints"), QStringLiteral("/a")}}).ok()); // a string, not a list
+        QVERIFY(!requests::decodeMountPoints({{QStringLiteral("mountPoint"), QStringLiteral("/a")}}).ok()); // the old key
+        QVERIFY(!requests::decodeUnmount({{QStringLiteral("mountPoints"), QVariantList{QStringLiteral("/a")}}, {QStringLiteral("confirmSystem"), false}}).ok());
         QVariantMap badU = requests::encodeUnmount(u);
         badU[QStringLiteral("confirmSystem")] = 1;
         QVERIFY(!requests::decodeUnmount(badU).ok());

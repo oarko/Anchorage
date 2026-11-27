@@ -105,7 +105,18 @@ private:
         QString hint;
     };
     MountChoices mountChoices(const anchorage::inventory::Item &item) const;
-    void runUnmount(const anchorage::inventory::Item &item, Route route, bool confirmSystem);
+    // Unmounting a drive and its binds (SPEC §8): the binds and any helper-only targets go in
+    // one helper request, binds first; a drive "any user" may unmount goes last, as the user.
+    struct UnmountJob {
+        QStringList viaHelper;
+        QString asUser;
+        bool confirmSystem = false;
+    };
+    void runUnmount(const UnmountJob &job);
+    void unmountFailed(const anchorage::client::Reply &reply, const QString &target, const UnmountJob &retry);
+    // Binds in /etc/fstab that show the drive mounted at `driveMountPoint` (or a folder on
+    // it), which are (`mounted`) or aren't mounted right now. Empty for a bind itself.
+    QStringList bindsOf(const anchorage::fstab::Entry &drive, bool mounted) const;
     void testMount(const QList<anchorage::fstab::Entry> &entries, const QString &backup);
     // Makes sure mount.cifs / mount.nfs exist for these file system types (offers to install
     // them), then runs `then`. Does nothing if the person cancels.

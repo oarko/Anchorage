@@ -504,6 +504,41 @@ MountOutcome unmount(const Paths &paths, const Caller &caller, const QString &mo
     return out;
 }
 
+namespace
+{
+template<typename One>
+MountOutcome eachInTurn(const QStringList &mountPoints, One one)
+{
+    MountOutcome out;
+    for (const QString &mp : mountPoints) {
+        MountOutcome o = one(mp);
+        out.createdDirs += o.createdDirs;
+        if (!o.ok()) {
+            out.errors = o.errors;
+            out.processes = o.processes;
+            out.failed = mp;
+            return out;
+        }
+        out.done.append(mp);
+    }
+    return out;
+}
+} // namespace
+
+MountOutcome mountEntries(const Paths &paths, const Caller &caller, const QStringList &mountPoints, const Runner &run)
+{
+    return eachInTurn(mountPoints, [&](const QString &mp) {
+        return mountEntry(paths, caller, mp, run);
+    });
+}
+
+MountOutcome unmountAll(const Paths &paths, const Caller &caller, const QStringList &mountPoints, bool confirmSystem, const Runner &run)
+{
+    return eachInTurn(mountPoints, [&](const QString &mp) {
+        return unmount(paths, caller, mp, confirmSystem, run);
+    });
+}
+
 QStringList processesUsing(const QString &path, const QString &procRoot)
 {
     struct stat target {

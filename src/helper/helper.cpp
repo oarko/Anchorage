@@ -97,15 +97,15 @@ public Q_SLOTS:
 
     ActionReply mountentry(const QVariantMap &args)
     {
-        const auto mountPoint = requests::decodeMountPoint(args);
-        if (!mountPoint) {
-            return error(mountPoint.error());
+        const auto mountPoints = requests::decodeMountPoints(args);
+        if (!mountPoints) {
+            return error(mountPoints.error());
         }
         const auto caller = who();
         if (!caller) {
             return error(caller.error());
         }
-        return mountReply(service::mountEntry(service::systemPaths(), *caller, *mountPoint, service::systemRunner()));
+        return mountReply(service::mountEntries(service::systemPaths(), *caller, *mountPoints, service::systemRunner()));
     }
 
     ActionReply mounttemporary(const QVariantMap &args)
@@ -131,7 +131,7 @@ public Q_SLOTS:
         if (!caller) {
             return error(caller.error());
         }
-        return mountReply(service::unmount(service::systemPaths(), *caller, request->mountPoint, request->confirmSystem, service::systemRunner()));
+        return mountReply(service::unmountAll(service::systemPaths(), *caller, request->mountPoints, request->confirmSystem, service::systemRunner()));
     }
 
     ActionReply writecredentials(const QVariantMap &args)
@@ -161,6 +161,8 @@ private:
         r.addData(QStringLiteral("errors"), outcome.errors);
         r.addData(QStringLiteral("createdDirs"), outcome.createdDirs);
         r.addData(QStringLiteral("processes"), outcome.processes);
+        r.addData(QStringLiteral("done"), outcome.done);
+        r.addData(QStringLiteral("failed"), outcome.failed);
         return r;
     }
 

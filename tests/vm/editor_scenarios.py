@@ -229,6 +229,25 @@ def main():
     res, _ = con.run("mount-entry /mnt/e2e-boot", "dana", PASSWORDS["dana"])
     check("... and mounts it again from fstab", res.startswith("RESULT ok") and fs_at("/mnt/e2e-boot") == "ext4", res)
 
+    # A drive and its binds in one request (SPEC §8): one password prompt even for a standard
+    # user with an administrator's password (auth_admin isn't remembered), binds first.
+    con.logout()
+    con.login("alice")
+    res, prompts = con.run("unmount /srv/e2e-bind /srv/e2e-data /mnt/e2e-boot", "sam", PASSWORDS["sam"])
+    check("alice unmounts the drive and both its binds with one password prompt",
+          res.startswith("RESULT ok") and prompts.count("password") == 1
+          and all(fs_at(p) == "" for p in ("/srv/e2e-bind", "/srv/e2e-data", "/mnt/e2e-boot")), f"{res} {prompts}")
+    res, prompts = con.run("mount-entry /mnt/e2e-boot /srv/e2e-bind /srv/e2e-data", "sam", PASSWORDS["sam"])
+    check("... and mounts the drive, then its binds, with one prompt",
+          res.startswith("RESULT ok") and prompts.count("password") == 1
+          and ssh("cat /srv/e2e-bind/data/marker").stdout.strip() == "on-the-drive"
+          and ssh("cat /srv/e2e-data/marker").stdout.strip() == "on-the-drive", f"{res} {prompts}")
+    res, _ = con.run("mount-entry /srv/e2e-missing-bind /mnt/e2e-boot", "sam", PASSWORDS["sam"])
+    check("a list stops at the first failure (a bind of a missing drive) and names it",
+          res.startswith("RESULT error") and "/srv/e2e-missing-bind" in res and fs_at("/srv/e2e-missing-bind") == "", res)
+    con.logout()
+    con.login("dana")
+
     # In use: a program sitting in the folder is named; nothing is unmounted.
     ssh("sudo -u nora sh -c 'cd /mnt/e2e-boot && exec sleep 300' >/dev/null 2>&1 &")
     time.sleep(1)

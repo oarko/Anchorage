@@ -12,9 +12,9 @@
 //                             [opt=<option>]... [bind=<target>[:<folder on the drive>]]... [--confirm]
 //   anchorage-e2e-client edit-remove <mount-point>
 //   anchorage-e2e-client settings <keep-backups> <ntfs3|ntfs>
-//   anchorage-e2e-client mount-entry <mount-point>
+//   anchorage-e2e-client mount-entry <mount-point>...   (one request, in order)
 //   anchorage-e2e-client mount-temp <spec> <mount-point> <type> [opt1,opt2,...] [--confirm]
-//   anchorage-e2e-client unmount <mount-point> [--confirm]
+//   anchorage-e2e-client unmount <mount-point>... [--confirm]
 //   anchorage-e2e-client suggest <device>        mount-point suggestions (no helper; prints SUGGEST lines)
 //   anchorage-e2e-client list-shares <host> smb|nfs [user]   (no helper; prints SHARE and VERSIONS lines)
 //   anchorage-e2e-client save-login <server> <user> [domain] (writecredentials; prints path=)
@@ -182,6 +182,16 @@ int main(int argc, char *argv[])
             }
         }
     };
+    // mount-entry / unmount: every argument after the command that isn't a --flag.
+    const auto listArgs = [&args] {
+        QStringList l;
+        for (qsizetype k = 2; k < args.size(); ++k) {
+            if (!args.at(k).startsWith(QLatin1String("--"))) {
+                l.append(args.at(k));
+            }
+        }
+        return l;
+    };
     const QString envPassword = qEnvironmentVariable("ANCHORAGE_E2E_PASSWORD");
     if (cmd == QLatin1String("list-shares") && args.size() >= 4) {
         const QString host = args.at(2);
@@ -292,14 +302,14 @@ int main(int argc, char *argv[])
         request = requests::encodeSettings(st);
     } else if (cmd == QLatin1String("mount-entry")) {
         action = QStringLiteral("mountentry");
-        request = requests::encodeMountPoint(args.at(2));
+        request = requests::encodeMountPoints(listArgs());
     } else if (cmd == QLatin1String("mount-temp") && args.size() >= 5) {
         action = QStringLiteral("mounttemporary");
         const QString opts = args.size() >= 6 && !args.at(5).startsWith(QLatin1String("--")) ? args.at(5) : QString();
         request = requests::encodeTemporaryMount({{args.at(2), args.at(3), args.at(4), opts.split(QLatin1Char(','), Qt::SkipEmptyParts), 0, 0}, confirm});
     } else if (cmd == QLatin1String("unmount")) {
         action = QStringLiteral("unmount");
-        request = requests::encodeUnmount({args.at(2), confirm});
+        request = requests::encodeUnmount({listArgs(), confirm});
     } else if (cmd == QLatin1String("save-login") && args.size() >= 4) {
         action = QStringLiteral("writecredentials");
         request = requests::encodeCredentials({args.at(2), args.at(3), envPassword, args.size() >= 5 && !args.at(4).startsWith(QLatin1String("--")) ? args.at(4) : QString()});

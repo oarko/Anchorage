@@ -147,9 +147,9 @@ Polkit group rule installed to `/usr/share/polkit-1/rules.d/60-anchorage-groups.
 
 | Action | Purpose | Who (checked by the helper) |
 |---|---|---|
-| `mountentry` | Mount an fstab entry, named by its mount point; options come only from `/etc/fstab` | Non-system entries: anyone who passes polkit. System entries: driveadmins/sudo |
+| `mountentry` | Mount fstab entries, named by their mount points (a list of 1–64, in order, stopping at the first failure; §8); options come only from `/etc/fstab` | Non-system entries: anyone who passes polkit. System entries: driveadmins/sudo |
 | `mounttemporary` | Mount a drive or share at a chosen folder **without** changing fstab (gone after a restart): device, mount point, type, options | driveadmins/sudo only; same mount-point zone rules as fstab (§7), typed confirmation for protected locations |
-| `unmount` | Unmount whatever is mounted at a folder | fstab entries: anyone who passes polkit. Not in fstab: driveadmins/sudo. System entries (`/`, `/home`, `/boot`…): driveadmins/sudo **after a typed confirmation** ("it is Linux; people like to break it from time to time") |
+| `unmount` | Unmount whatever is mounted at each folder in a list (1–64, in order, stopping at the first failure) | fstab entries: anyone who passes polkit. Not in fstab: driveadmins/sudo. System entries (`/`, `/home`, `/boot`…): driveadmins/sudo **after a typed confirmation** ("it is Linux; people like to break it from time to time") |
 
 Polkit defaults as for `writefstab`: admin password; driveadmins their own password.
 
@@ -232,9 +232,22 @@ General rules for every zone:
   reachable at the old location too. Bind entries also appear as their own tiles.
 - **Removing a drive** also removes every bind that shows it (or a folder on it), after a
   warning listing them (agreed 2026-11-26, implemented).
-- Planned (agreed 2026-11-26, not built yet): Mount/Unmount on a drive include its binds
-  (drive first / binds first); `mountentry` and `unmount` accept a list of mount points so
-  Remount asks for the password once; after Apply, new binds of a mounted drive are
+- **Mount/Unmount on a drive include its binds** (implemented 2026-11-27): Mount sends the
+  drive, then its binds that aren't mounted; Unmount sends its mounted binds, then the drive.
+  `mountentry` and `unmount` take a list of 1–64 mount points (no repeats), each checked by
+  the same rules, handled in order and stopping at the first failure; the reply names the
+  ones done and the one that failed, so "in use" → Try Again continues with the rest. One
+  request means one password prompt. Remount sends one unmount (binds first) and one mount
+  (drive first).
+- **Binds can't be "any user" mounts**: the kernel refuses bind mounts by ordinary users
+  ("must be superuser", util-linux 2.41.3 on Kubuntu 26.04, tested in the VM 2026-11-27),
+  so binds never get `user`/`users`. A drive with binds therefore can't be "any user" +
+  "only when asked" (agreed 2026-11-27): the editor refuses that combination and suggests
+  "the first time someone opens the folder" (systemd mounts the drive and its binds with no
+  password) or administrators only. At start-up and when opened work for everyone. An
+  older entry with the combination shows the error when its editor is opened; Mount still
+  mounts the drive as the user and asks for a password for the binds.
+- Planned (agreed 2026-11-26, not built yet): after Apply, new binds of a mounted drive are
   mounted in the same request as the test mount.
 
 Implemented (2026-11-25) in `src/app/entryeditor.*`, `src/core/access.*`, `src/core/options.*`:
