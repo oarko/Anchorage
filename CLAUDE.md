@@ -42,7 +42,8 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
 - `tests/vm/vm.sh deps` installs build dependencies added after the base image was made
   (pkg-config, libsmbclient-dev); every runner calls it, so the base image stays untouched.
 - **Real drives**: `tests/vm/realdrives.sh attach|detach|status` attaches the developer's
-  Lingames (btrfs) and Windows (NTFS) disks to the VM by serial number (refuses while mounted
+  Lingames (btrfs) and Windows (NTFS) disks to the VM by serial number, read from the local
+  file `~/.config/anchorage-vm/drives` (never commit drive serials) (refuses while mounted
   on the host; needs a temporary `setfacl` by the user). `tests/vm/realdrives_test.sh` (~15 min)
   runs `realdrives_scenarios.py` against them (only an `anchorage-test` folder is written and
   removed), then resets the VM and installs Anchorage fresh for hands-on testing.
