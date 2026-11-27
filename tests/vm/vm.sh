@@ -9,6 +9,7 @@
 #   tests/vm/vm.sh reset     throw away all changes: back to the clean base image
 #   tests/vm/vm.sh wait      wait until the VM accepts SSH (up to 4 minutes)
 #   tests/vm/vm.sh sync      copy the source tree into the VM (~/src)
+#   tests/vm/vm.sh deps      install build dependencies added since the base image was made
 #   tests/vm/vm.sh console   serial console (boot messages, emergency shell); Ctrl+] exits
 #
 # Disks: anchorage-base.qcow2 is the clean, read-only install (plus its UEFI settings
@@ -107,6 +108,16 @@ case "${1:-status}" in
   status)
     echo "$VM: $(state)"
     ss -ltn | grep -q "127.0.0.1:${PORT} " && echo "SSH forward: 127.0.0.1:${PORT}" || echo "SSH forward: not listening"
+    ;;
+  deps)
+    # Build dependencies added after the base image was made (installed per run, so the
+    # base image stays untouched). Idempotent and quick when already there.
+    "$0" ssh -o BatchMode=yes 'missing=""
+      for p in pkg-config libsmbclient-dev; do dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"; done
+      if [ -n "$missing" ]; then
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q $missing >/dev/null
+      fi'
     ;;
   ssh)
     shift

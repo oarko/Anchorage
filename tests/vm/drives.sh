@@ -12,6 +12,7 @@ vm="$here/vm.sh"
 "$vm" wait
 "$vm" sync
 
+"$vm" deps
 "$vm" ssh -o BatchMode=yes 'bash -s' <<'VM'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive

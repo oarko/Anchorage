@@ -12,6 +12,7 @@ Test users (fresh random passwords per run, kept in memory only, never printed):
   dana   member of driveadmins sam   member of sudo (administrator)
 """
 import os
+import shlex
 import re
 import secrets
 import select
@@ -153,14 +154,16 @@ class Console:
         self.type("exit\n")
         self.expect([r"login: *$"], 30)
 
-    def run(self, args, identity=None, password=None):
+    def run(self, args, identity=None, password=None, env=None):
         """Runs the client; answers prompts as `identity` with `password` (WRONG = typo)."""
         # The client starts in the background, signals it is ready and waits. pkttyagent
         # registers for exactly that client process (KAuth's client-side check asks polkit
         # about the requesting process), reads the password from this console, and tells
         # the client to go once registered (--notify-fd). When the client exits, the agent stops.
         step = ("clear\nrm -f ~/e2e.res ~/e2e.name ~/e2e.go\n"
+                f"{' '.join(f'{k}={shlex.quote(v)}' for k, v in (env or {}).items())} "
                 f"ANCHORAGE_E2E_HANDSHAKE=$HOME/e2e anchorage-e2e-client {args} > ~/e2e.res 2>&1 &\n"
+                "rm -f ~/step.sh\n"
                 "CPID=$!\n"
                 "for i in $(seq 100); do [ -s ~/e2e.name ] && break; sleep 0.1; done\n"
                 "( while kill -0 $CPID 2>/dev/null; do sleep 0.2; done; pkill -x -u \"$(id -u)\" pkttyagent ) &\n"

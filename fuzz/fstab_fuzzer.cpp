@@ -3,6 +3,7 @@
 // Build with the "fuzz" preset, then run e.g.:
 //   build/fuzz/bin/fstab_fuzzer -max_total_time=300 fuzz/corpus/fstab tests/data
 #include "fstab.h"
+#include "secrets.h"
 #include "settings.h"
 
 #include <cstdint>
@@ -29,6 +30,27 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         const anchorage::settings::Settings st = anchorage::settings::parse(input);
         if (!anchorage::settings::validate(st).isEmpty() || anchorage::settings::parse(anchorage::settings::serialize(st)) != st) {
             fail("settings parser produced something it can't write back");
+        }
+    }
+
+    // 0b. Password redaction (SPEC §11): once a password has left fstab, redact() removes it
+    //     from a backup completely, and never touches a file without passwords.
+    {
+        const QStringList gone = anchorage::secrets::removedPasswords(input, QByteArrayView());
+        const QByteArray clean = anchorage::secrets::redact(input, gone);
+        const anchorage::fstab::File after = anchorage::fstab::File::parse(clean);
+        for (const int i : after.entryLines()) {
+            const auto &e = after.lines().at(static_cast<std::size_t>(i)).entry;
+            for (const QString &o : e->options) {
+                const QString value = o.section(QLatin1Char('='), 1);
+                if ((o.startsWith(QLatin1String("password=")) || o.startsWith(QLatin1String("pass="))) && gone.contains(value)
+                    && (e->type == QLatin1String("cifs") || e->type == QLatin1String("smb3"))) {
+                    fail("a removed password survived redaction");
+                }
+            }
+        }
+        if (gone.isEmpty() && clean != input.toByteArray()) {
+            fail("redaction changed a file without passwords");
         }
     }
 

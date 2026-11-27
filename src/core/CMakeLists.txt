@@ -15,10 +15,14 @@ add_library(anchorage_core STATIC
     verify.h
     caller.cpp
     caller.h
+    clienttools.cpp
+    clienttools.h
     drives.cpp
     drives.h
     inventory.cpp
     inventory.h
+    mounterrors.cpp
+    mounterrors.h
     mounts.cpp
     mounts.h
     fstabservice.cpp
@@ -29,6 +33,8 @@ add_library(anchorage_core STATIC
     mountpolicy.h
     result.h
     safefs.cpp
+    secrets.cpp
+    secrets.h
     settings.cpp
     settings.h
     safefs.h

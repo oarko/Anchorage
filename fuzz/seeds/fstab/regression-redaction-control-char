@@ -1,0 +1,2 @@
+//nas/a /mnt/a cifs username=x,password=s3cre[,nofail 0 0
+//nas/b /mnt/b smb3 pass=ab^ 0 0

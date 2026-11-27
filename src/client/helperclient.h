@@ -14,7 +14,7 @@ class QWindow;
 namespace anchorage::client
 {
 
-enum class Action { WriteFstab, RestoreBackup, AddSharedMount, RemoveSharedMount, WriteSettings, MountEntry, MountTemporary, Unmount };
+enum class Action { WriteFstab, RestoreBackup, AddSharedMount, RemoveSharedMount, WriteSettings, MountEntry, MountTemporary, Unmount, WriteCredentials };
 QString actionId(Action action); // io.github.oarko.anchorage.writefstab, ...
 
 struct Reply {

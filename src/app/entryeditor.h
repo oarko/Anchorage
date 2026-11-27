@@ -3,6 +3,8 @@
 
 #include "access.h"
 #include "binds.h"
+#include "fstabservice.h"
+#include "shares.h"
 #include "caller.h"
 #include "datasource.h"
 #include "drives.h"
@@ -35,6 +37,11 @@ struct EditorContext {
     QString ntfsDriver = QStringLiteral("ntfs3"); // suggested for NTFS drives (settings)
     QList<anchorage::mounts::Mount> mounts; // what is mounted now
     QList<anchorage::binds::Bind> binds; // existing "also show it at" entries of this drive
+    // Network shares (SPEC §11)
+    QString credentialsDir = QStringLiteral("/etc/anchorage/credentials");
+    std::optional<anchorage::shares::Login> login; // typed in Connect to Server
+    bool guest = false;
+    QList<int> nfsVersions; // what the server offers, if known
 };
 
 // The entry editor dialog (SPEC §8, §15): Basic / Access / Advanced tabs and a live
@@ -68,6 +75,9 @@ public:
     void addBind(const anchorage::binds::Bind &bind);
     void removeBind(int index);
 
+    // SMB login typed here, to save as a root-only file when applying (SPEC §11).
+    std::optional<anchorage::service::SavedLogin> pendingLogin() const;
+
     // Asks for confirmation first when ntfs3 is combined with restrictive permissions.
     // (QDialog::accept is already a virtual slot.)
     void accept() override;
@@ -86,6 +96,10 @@ private:
     const anchorage::drives::Volume *matchingVolume() const;
     void updateSuggestions();
     void refreshBinds();
+    QWidget *buildShareSection(QWidget *page);
+    void applyLogin(); // the Login section -> options
+    QString shareServer() const;
+    QString credentialsPathFor(const QString &user) const;
 
     anchorage::fstab::Entry m_entry;
     anchorage::fstab::Entry m_initial;
@@ -99,6 +113,7 @@ private:
     QTabWidget *m_tabs;
     // Basic
     QComboBox *m_drive;
+    class QFormLayout *m_basicForm = nullptr;
     QLineEdit *m_spec;
     QComboBox *m_identify;
     QLabel *m_specHint;
@@ -109,6 +124,14 @@ private:
     QCheckBox *m_keepOld;
     QList<anchorage::binds::Bind> m_binds;
     QString m_mountedAt; // where the drive is mounted now (outside the system folders)
+    QWidget *m_loginBox;
+    QComboBox *m_loginMode;
+    QLineEdit *m_loginUser;
+    QLineEdit *m_loginPassword;
+    QLineEdit *m_loginDomain;
+    QWidget *m_nfsBox;
+    QComboBox *m_nfsVersion;
+    QLabel *m_nfsOffered;
     QLabel *m_zone;
     QComboBox *m_type;
     QLabel *m_typeInfo;

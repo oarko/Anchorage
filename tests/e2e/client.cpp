@@ -16,6 +16,11 @@
 //   anchorage-e2e-client mount-temp <spec> <mount-point> <type> [opt1,opt2,...] [--confirm]
 //   anchorage-e2e-client unmount <mount-point> [--confirm]
 //   anchorage-e2e-client suggest <device>        mount-point suggestions (no helper; prints SUGGEST lines)
+//   anchorage-e2e-client list-shares <host> smb|nfs [user]   (no helper; prints SHARE and VERSIONS lines)
+//   anchorage-e2e-client save-login <server> <user> [domain] (writecredentials; prints path=)
+//   anchorage-e2e-client install-tool smb|nfs                (PackageKit, not the helper)
+// Passwords come from the ANCHORAGE_E2E_PASSWORD environment variable, never the command
+// line (which every user can see in the process list).
 //
 // "edit" builds the entry the way the entry editor does (access::defaultsFor, then
 // access::apply for the Access tab choices, opt= for the Advanced tab), adds it or
@@ -34,6 +39,9 @@
 #include "binds.h"
 #include "drives.h"
 #include "locations.h"
+#include "clienttools.h"
+#include "packagekit.h"
+#include "shares.h"
 #include "mounts.h"
 #include "helperclient.h"
 #include "requests.h"
@@ -43,6 +51,8 @@
 #include <QFile>
 #include <QTextStream>
 #include <QThread>
+
+#include <cstdlib>
 
 using namespace anchorage;
 
@@ -154,6 +164,72 @@ int main(int argc, char *argv[])
         return usage();
     }
     const QString cmd = args.at(1);
+    // With ANCHORAGE_E2E_HANDSHAKE set: announce our bus name and wait until the test has
+    // registered a polkit agent for this process (before anything that may need a password).
+    const auto waitForAgent = [] {
+        const QString handshake = qEnvironmentVariable("ANCHORAGE_E2E_HANDSHAKE");
+        if (!handshake.isEmpty()) {
+            QFile name(handshake + QStringLiteral(".name"));
+            if (!name.open(QIODevice::WriteOnly)) {
+                out << "RESULT error usage cannot write " << name.fileName() << "\n";
+                out.flush();
+                std::exit(2);
+            }
+            name.write(QDBusConnection::systemBus().baseService().toUtf8());
+            name.close();
+            for (int i = 0; i < 300 && !QFile::exists(handshake + QStringLiteral(".go")); ++i) {
+                QThread::msleep(100);
+            }
+        }
+    };
+    const QString envPassword = qEnvironmentVariable("ANCHORAGE_E2E_PASSWORD");
+    if (cmd == QLatin1String("list-shares") && args.size() >= 4) {
+        const QString host = args.at(2);
+        if (args.at(3) == QLatin1String("smb")) {
+            const shares::Login login{args.value(4), envPassword, QString(), false};
+            const shares::SmbList l = shares::listSmb(host, login);
+            if (!l.ok()) {
+                out << "RESULT error smb" << int(l.error) << " " << l.message << "\n";
+                return 1;
+            }
+            for (const auto &sh : l.shares) {
+                out << "SHARE " << sh.name << "\n";
+            }
+        } else {
+            const auto l = shares::listNfs(host);
+            if (!l) {
+                out << "RESULT error nfs " << l.error() << "\n";
+                return 1;
+            }
+            for (const auto &sh : *l) {
+                out << "SHARE " << sh.name << "\n";
+            }
+            QStringList v;
+            for (int n : shares::nfsVersions(host)) {
+                v.append(QString::number(n));
+            }
+            out << "VERSIONS " << v.join(QLatin1Char(',')) << "\n";
+        }
+        out << "RESULT ok\n";
+        return 0;
+    }
+    if (cmd == QLatin1String("install-tool")) {
+        QFile osr(QStringLiteral("/etc/os-release"));
+        const QByteArray data = osr.open(QIODevice::ReadOnly) ? osr.readAll() : QByteArray();
+        const auto manager = clienttools::detectManager(clienttools::parseOsRelease(data), [](const QString &p) {
+            return QFile::exists(p);
+        });
+        const auto protocol = args.at(2) == QLatin1String("nfs") ? clienttools::Protocol::Nfs : clienttools::Protocol::Smb;
+        waitForAgent();
+        int code = 1;
+        packagekit::install(clienttools::packageName(manager, protocol), &app, [&code, &app](const packagekit::Result &r) {
+            out << (r.ok ? "RESULT ok" : r.cancelled ? "RESULT error cancelled" : "RESULT error ") << (r.ok ? QString() : r.message) << "\n";
+            code = r.ok ? 0 : 1;
+            app.quit();
+        });
+        app.exec();
+        return code;
+    }
     if (cmd == QLatin1String("suggest")) {
         // The editor's suggestions for a real device (SPEC §8), from lsblk and mountinfo.
         const auto volumes = drives::scan();
@@ -224,6 +300,9 @@ int main(int argc, char *argv[])
     } else if (cmd == QLatin1String("unmount")) {
         action = QStringLiteral("unmount");
         request = requests::encodeUnmount({args.at(2), confirm});
+    } else if (cmd == QLatin1String("save-login") && args.size() >= 4) {
+        action = QStringLiteral("writecredentials");
+        request = requests::encodeCredentials({args.at(2), args.at(3), envPassword, args.size() >= 5 && !args.at(4).startsWith(QLatin1String("--")) ? args.at(4) : QString()});
     } else if (cmd == QLatin1String("restore")) {
         action = QStringLiteral("restorebackup");
         request = requests::encodeRestore({args.at(2), confirm});
@@ -231,20 +310,7 @@ int main(int argc, char *argv[])
         return usage();
     }
 
-    const QString handshake = qEnvironmentVariable("ANCHORAGE_E2E_HANDSHAKE");
-    if (!handshake.isEmpty()) {
-        QFile name(handshake + QStringLiteral(".name"));
-        if (!name.open(QIODevice::WriteOnly)) {
-            out << "RESULT error usage cannot write " << name.fileName() << "\n";
-            return 2;
-        }
-        name.write(QDBusConnection::systemBus().baseService().toUtf8());
-        name.close();
-        for (int i = 0; i < 300 && !QFile::exists(handshake + QStringLiteral(".go")); ++i) {
-            QThread::msleep(100);
-        }
-    }
-
+    waitForAgent();
     const QHash<QString, client::Action> actions = {{QStringLiteral("writefstab"), client::Action::WriteFstab},
                                                     {QStringLiteral("addsharedmount"), client::Action::AddSharedMount},
                                                     {QStringLiteral("removesharedmount"), client::Action::RemoveSharedMount},
@@ -252,7 +318,8 @@ int main(int argc, char *argv[])
                                                     {QStringLiteral("writesettings"), client::Action::WriteSettings},
                                                     {QStringLiteral("mountentry"), client::Action::MountEntry},
                                                     {QStringLiteral("mounttemporary"), client::Action::MountTemporary},
-                                                    {QStringLiteral("unmount"), client::Action::Unmount}};
+                                                    {QStringLiteral("unmount"), client::Action::Unmount},
+                                                    {QStringLiteral("writecredentials"), client::Action::WriteCredentials}};
     const client::Reply reply = client::runBlocking(actions.value(action), request);
     if (!reply.ok()) {
         QString message = reply.message;

@@ -2,6 +2,7 @@
 #include "datasource.h"
 
 #include "fstabservice.h"
+#include "packagekit.h"
 #include "paths.h"
 #include "safefs.h"
 
@@ -9,7 +10,9 @@
 
 #include <QFile>
 #include <QFileSystemWatcher>
+#include <QFutureWatcher>
 #include <QProcess>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QWindow>
 #include <QSocketNotifier>
 #include <QWidget>
@@ -206,4 +209,72 @@ void SystemDataSource::userMount(const QString &mountPoint, bool mount, Done don
         }
     });
     p->start(mount ? QStringLiteral("/usr/bin/mount") : QStringLiteral("/usr/bin/umount"), {mountPoint});
+}
+
+void SystemDataSource::writeCredentials(const requests::Credentials &request, QWidget *window, Done done)
+{
+    client::run(client::Action::WriteCredentials, requests::encodeCredentials(request), windowOf(window), this, std::move(done));
+}
+
+void SystemDataSource::browse(const QString &host, bool smb, bool nfs, const shares::Login &login, BrowseDone done)
+{
+    auto *watcher = new QFutureWatcher<Browse>(this);
+    connect(watcher, &QFutureWatcher<Browse>::finished, this, [watcher, done = std::move(done)] {
+        done(watcher->result());
+        watcher->deleteLater();
+    });
+    watcher->setFuture(QtConcurrent::run([host, smb, nfs, login] {
+        Browse b;
+        if (smb) {
+            b.smbTried = true;
+            b.smb = shares::listSmb(host, login);
+        }
+        if (nfs) {
+            b.nfsTried = true;
+            if (auto list = shares::listNfs(host)) {
+                b.nfs = *list;
+            } else {
+                b.nfsError = list.error();
+            }
+            b.nfsVersions = shares::nfsVersions(host);
+        }
+        return b;
+    }));
+}
+
+namespace
+{
+bool fileExists(const QString &p)
+{
+    return QFile::exists(p);
+}
+
+clienttools::Manager packageManager()
+{
+    QFile f(QStringLiteral("/etc/os-release"));
+    const QByteArray data = f.open(QIODevice::ReadOnly) ? f.read(16384) : QByteArray();
+    return clienttools::detectManager(clienttools::parseOsRelease(data), fileExists);
+}
+} // namespace
+
+bool SystemDataSource::toolInstalled(clienttools::Protocol protocol)
+{
+    return clienttools::isInstalled(protocol, fileExists);
+}
+
+QString SystemDataSource::installCommand(clienttools::Protocol protocol)
+{
+    return clienttools::installCommand(packageManager(), protocol);
+}
+
+bool SystemDataSource::canInstall()
+{
+    return packagekit::available();
+}
+
+void SystemDataSource::installTool(clienttools::Protocol protocol, InstallDone done)
+{
+    packagekit::install(clienttools::packageName(packageManager(), protocol), this, [done = std::move(done)](const packagekit::Result &r) {
+        done(r.ok, r.cancelled, r.message);
+    });
 }

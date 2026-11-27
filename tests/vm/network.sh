@@ -34,6 +34,7 @@ step "Installing Samba and the NFS server in the VM"
 
 step "Building and running the network mount test"
 status=0
+"$vm" deps
 "$vm" ssh -o BatchMode=yes 'set -e
   cmake -S ~/src -B ~/build-mt -G Ninja -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo >/dev/null
   cmake --build ~/build-mt --target mounttest | tail -1

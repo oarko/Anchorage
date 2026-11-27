@@ -107,6 +107,7 @@ group database; nothing the GUI says about the user is trusted.
 | `restorebackup` | Restore a named backup; goes through the same checks as `writefstab` | admin password | driveadmins: own password |
 | `addsharedmount` | Add one shared network mount in `/mnt/<name>` | admin password | netmount, driveadmins: own password |
 | `removesharedmount` | Remove one shared network mount | admin password | netmount, driveadmins: own password |
+| `writecredentials` | Save an SMB login as `/etc/anchorage/credentials/<caller>-<server>-<user>` (`0600 root:root`, folder `0700`); server/user validated, no line breaks; the password is never logged or returned | admin password | driveadmins, netmount: own password |
 | `writesettings` | Replace `/etc/anchorage/config` (system-wide settings); refused unless the caller is in driveadmins or an administrator; values validated | admin password | driveadmins: own password |
 
 How `writefstab` decides (`policy::planFstabWrite`):
@@ -120,6 +121,10 @@ How `writefstab` decides (`policy::planFstabWrite`):
   (folder must be empty or new); blocked zone for sudo with `confirmProtected` only.
 - Everyone else who passes polkit (a standard user with an admin's password) can change
   non-system entries in the safe zone.
+- **Saved logins** (`credentials=`): unless the caller is in driveadmins or an administrator,
+  a new or changed entry may only name the caller's own files
+  (`/etc/anchorage/credentials/<caller>-…`), so nobody can make the computer send another
+  person's password to a server of their choice.
 - **Bind sources** (agreed 2026-11-26): a new or changed `bind`/`rbind` entry must show a
   folder from the safe zone or from inside another (non-system) entry's mount point;
   anything else (system folders) is for driveadmins/sudo only.
@@ -337,6 +342,48 @@ Implemented (read-only) in `src/core/drives`, `mounts` and `inventory`:
 - **`cifs-utils` missing**: detect it and offer to install it (PackageKit).
 - **Option catalogue**: data file listing every `mount.cifs(8)` and `nfs(5)` option with
   description, type, default, valid values, and NFS version/SMB dialect applicability.
+
+Agreed 2026-11-26:
+- **Order of work**: (1) type a server's address, list its shares, add one to fstab (at
+  start-up, or shared in `/mnt`), with password files and the `cifs-utils`/NFS client
+  check; (2) "mount on login" for users (KWallet + login agent); (3) automatic discovery.
+- **Password files for fstab mounts**: one root-only (`0600 root:root`) file per Linux owner,
+  server and remote user name, `/etc/anchorage/credentials/<owner>-<server>-<user>`, written
+  by a new helper action (driveadmins/sudo; netmount members only their own `<owner>-` files,
+  matching the shared-mount rule in §6). Passwords are never shown again or logged.
+- **Missing client tools** (`mount.cifs`, `mount.nfs`): if PackageKit's D-Bus service is
+  available, offer **Install** (PackageKit asks for the password through its own polkit
+  rules; Anchorage's helper is not involved). Always also show the command for the
+  distribution's package manager, detected from `/etc/os-release` (`ID`, `ID_LIKE`) and the
+  tool actually present: apt (Debian/Ubuntu/Mint: `cifs-utils`, `nfs-common`), dnf
+  (Fedora/RHEL family: `cifs-utils`, `nfs-utils`), zypper (openSUSE: `cifs-utils`,
+  `nfs-client`), pacman (Arch family: `cifs-utils`, `nfs-utils`); otherwise the package name.
+  PackageKit is used over D-Bus directly (no extra library).
+- **Passwords typed into fstab** (`password=`/`pass=` on cifs/smb3 lines; agreed 2026-11-26):
+  `/etc/fstab` is readable by every user. For driveadmins/sudo only, a banner says how many
+  entries store a password and offers **Move to a Safe File**: each login is saved with
+  `writecredentials` and the line's `username=`/`password=`/`domain=` become `credentials=…`,
+  as pending changes for Apply. Standard users are **not** told (the editor's general
+  warning on `password=` stays), so nobody is pointed at the password. After the move,
+  a note recommends changing the password on the server.
+- **Backups with a password that has left fstab**: whenever a write removes a password
+  from fstab, the helper redacts it in every backup (including the one just made):
+  the option becomes `password=removed-by-anchorage`, the rest of each backup is
+  unchanged. Restoring such a backup gives a line whose login must be re-entered.
+- **NFS versions**: listing a server asks rpcbind which NFS versions it offers (`rpcinfo`,
+  no root needed); NFSv4-only servers without rpcbind count as "NFS 4" if port 2049 answers.
+  The editor offers Automatic (type `nfs`, newest both sides support; the default) or a
+  fixed 4.2/4.1/4/3 (`vers=`), flags a version the server doesn't offer, and the test mount
+  after Apply confirms it. Mount errors are explained (version not offered, access denied
+  by export rules or the privileged-port requirement, root squashing).
+- **Why mounting needs cifs-utils when Dolphin doesn't**: Dolphin's `smb://`/`nfs://` are
+  KIO workers that talk the protocol themselves (libsmbclient), only inside KDE programs and
+  only for the logged-in person. A mount is an ordinary folder for every program, which is
+  what `mount.cifs`/`mount.nfs` provide.
+- **Testing**: Samba and NFS servers in the VM (test-only passwords), plus the developer's
+  NAS. Its address and login live in a private file in the developer's home folder (mode
+  600), never in the repository or logs; it is used read-only except for a share the owner
+  names for writing.
 
 ## 12. Desktop integration
 

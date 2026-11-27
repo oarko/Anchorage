@@ -6,6 +6,7 @@
 #include "mounts.h"
 #include "paths.h"
 #include "safefs.h"
+#include "secrets.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -153,6 +154,24 @@ Outcome commit(const Paths &paths, const QByteArray &current, const QByteArray &
     }
     if (Status s = safefs::writeFileAtomic(paths.fstabDir, paths.fstabName, proposed, 0644, {0, 0}); !s) {
         out.errors.append(s.error);
+        return out;
+    }
+    // A password that has left fstab must not live on in the (world-readable) backups,
+    // including the one just made (SPEC §11).
+    const QStringList gone = secrets::removedPasswords(current, proposed);
+    if (!gone.isEmpty()) {
+        if (auto names = listBackups(paths)) {
+            for (const QString &n : *names) {
+                auto data = safefs::readFile(paths.backupDir, n, fstab::maxFileSize);
+                if (!data) {
+                    continue;
+                }
+                const QByteArray clean = secrets::redact(*data, gone);
+                if (clean != *data) {
+                    (void)safefs::writeFileAtomic(paths.backupDir, n, clean, 0644, {0, 0});
+                }
+            }
+        }
     }
     return out;
 }
@@ -525,6 +544,80 @@ QStringList processesUsing(const QString &path, const QString &procRoot)
     }
     QStringList out(names.cbegin(), names.cend());
     out.sort();
+    return out;
+}
+
+QStringList checkLogin(const SavedLogin &l)
+{
+    QStringList errors;
+    const auto hasControl = [](const QString &s) {
+        return std::any_of(s.cbegin(), s.cend(), [](QChar c) {
+            return c.category() == QChar::Other_Control || c == QChar::LineSeparator || c == QChar::ParagraphSeparator;
+        });
+    };
+    static const QRegularExpression host(QStringLiteral("^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$|^\\[[0-9A-Fa-f:.]{2,45}\\]$"));
+    if (!host.match(l.server).hasMatch()) {
+        errors.append(QStringLiteral("The server name is not valid."));
+    }
+    if (l.user.isEmpty() || l.user.size() > 256 || hasControl(l.user) || l.user.contains(QLatin1Char('/')) || l.user != l.user.trimmed()) {
+        errors.append(QStringLiteral("The user name is not valid."));
+    }
+    if (l.password.size() > 1024 || hasControl(l.password)) {
+        errors.append(QStringLiteral("The password can't contain line breaks."));
+    }
+    if (l.domain.size() > 256 || hasControl(l.domain) || l.domain.contains(QLatin1Char('/'))) {
+        errors.append(QStringLiteral("The domain is not valid."));
+    }
+    return errors;
+}
+
+QString credentialsName(const QString &owner, const QString &server, const QString &user)
+{
+    static const QRegularExpression bad(QStringLiteral("[^A-Za-z0-9._-]"));
+    QString s = server;
+    QString u = user;
+    s.replace(bad, QStringLiteral("_"));
+    u.replace(bad, QStringLiteral("_"));
+    return QStringLiteral("%1-%2-%3").arg(owner, s, u);
+}
+
+CredentialsOutcome writeCredentials(const Paths &paths, const Caller &caller, const SavedLogin &login)
+{
+    CredentialsOutcome out;
+    if (!caller.fullAccess() && !caller.netMount) {
+        out.errors.append(QStringLiteral("Only driveadmins, administrators and members of netmount can save logins for network shares."));
+        return out;
+    }
+    if (const QStringList e = checkLogin(login); !e.isEmpty()) {
+        out.errors = e;
+        return out;
+    }
+    if (caller.name.isEmpty() || caller.name.contains(QLatin1Char('/'))) {
+        out.errors.append(QStringLiteral("Could not tell who is asking."));
+        return out;
+    }
+    // The config folder stays readable by everyone (backups, settings): create it with its
+    // own mode first, because makeDirectories gives missing parents the mode it is given.
+    if (Status st = ensureDir(paths.configDir, 0755); !st) {
+        out.errors.append(st.error);
+        return out;
+    }
+    // Only root may enter the credentials folder, so nobody else can read or swap the files.
+    if (Status st = safefs::makeDirectories(paths.credentialsDir, 0700, safefs::Owner{0, 0}); !st) {
+        out.errors.append(st.error);
+        return out;
+    }
+    QByteArray content = "username=" + login.user.toUtf8() + "\npassword=" + login.password.toUtf8() + "\n";
+    if (!login.domain.isEmpty()) {
+        content += "domain=" + login.domain.toUtf8() + "\n";
+    }
+    const QString name = credentialsName(caller.name, login.server, login.user);
+    if (Status st = safefs::writeFileAtomic(paths.credentialsDir, name, content, 0600, {0, 0}); !st) {
+        out.errors.append(st.error); // safefs errors name the file, never its content
+        return out;
+    }
+    content.fill('\0'); // don't leave the password lying around in memory longer than needed
+    out.path = paths.credentialsDir + QLatin1Char('/') + name;
     return out;
 }
 

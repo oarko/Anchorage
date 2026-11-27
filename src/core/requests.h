@@ -41,6 +41,14 @@ Result<Restore> decodeRestore(const QVariantMap &args);
 Result<settings::Settings> decodeSettings(const QVariantMap &args); // writesettings
 Result<TemporaryMount> decodeTemporaryMount(const QVariantMap &args); // mounttemporary
 Result<Unmount> decodeUnmount(const QVariantMap &args); // unmount
+
+struct Credentials {
+    QString server;
+    QString user;
+    QString password;
+    QString domain;
+};
+Result<Credentials> decodeCredentials(const QVariantMap &args); // writecredentials
 // mountentry uses decodeMountPoint.
 
 // Builders used by the GUI side (and tests), so both ends agree on the keys.
@@ -51,5 +59,6 @@ QVariantMap encodeRestore(const Restore &request);
 QVariantMap encodeSettings(const settings::Settings &settings);
 QVariantMap encodeTemporaryMount(const TemporaryMount &request);
 QVariantMap encodeUnmount(const Unmount &request);
+QVariantMap encodeCredentials(const Credentials &request);
 
 } // namespace anchorage::requests

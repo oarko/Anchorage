@@ -8,6 +8,9 @@
 #include "mainwindow.h"
 #include "placespanel.h"
 #include "applydialogs.h"
+#include "connectdialog.h"
+#include "mountatdialog.h"
+#include <QClipboard>
 #include "backupspage.h"
 #include <KActionCollection>
 
@@ -117,6 +120,7 @@ public:
     void writeFstab(const requests::WriteFstab &request, QWidget *, Done done) override
     {
         writes.append(request);
+        calls.append(QStringLiteral("writefstab"));
         client::Reply r;
         r.status = nextStatus;
         if (r.ok() && request.baselineFingerprint != service::fingerprint(m_fstab)) {
@@ -172,6 +176,49 @@ public:
         }
         done(r);
     }
+    void writeCredentials(const requests::Credentials &request, QWidget *, Done done) override
+    {
+        savedLogins.append(request);
+        calls.append(QStringLiteral("savelogin:") + request.server);
+        client::Reply r;
+        r.status = client::Reply::Status::Ok;
+        r.data.insert(QStringLiteral("path"), QStringLiteral("/etc/anchorage/credentials/oarko-%1-%2").arg(request.server, request.user));
+        done(r);
+    }
+    QList<requests::Credentials> savedLogins;
+
+    // Network shares: a pretend NAS.
+    void browse(const QString &host, bool smb, bool nfs, const shares::Login &login, BrowseDone done) override
+    {
+        calls.append(QStringLiteral("browse:%1 smb=%2 nfs=%3 user=%4").arg(host).arg(smb).arg(nfs).arg(login.user));
+        Browse b;
+        if (smb) {
+            b.smbTried = true;
+            if (login.user.isEmpty() && !login.guest) {
+                b.smb.error = shares::SmbError::NeedsLogin;
+                b.smb.message = QStringLiteral("%1 needs a user name and password.").arg(host);
+            } else {
+                b.smb.shares = {{QStringLiteral("test_share"), QString()}, {QStringLiteral("Media"), QStringLiteral("films")}};
+            }
+        }
+        if (nfs) {
+            b.nfsTried = true;
+            b.nfs = {{QStringLiteral("/mnt/NAS_Pool/TVshows"), QStringLiteral("*")}};
+            b.nfsVersions = {4, 3};
+        }
+        done(b);
+    }
+    bool toolInstalled(clienttools::Protocol p) override { return !missingTools.contains(int(p)); }
+    QString installCommand(clienttools::Protocol p) override { return p == clienttools::Protocol::Smb ? QStringLiteral("sudo apt install cifs-utils") : QStringLiteral("sudo apt install nfs-common"); }
+    bool canInstall() override { return packageKit; }
+    void installTool(clienttools::Protocol p, InstallDone done) override
+    {
+        calls.append(QStringLiteral("install:%1").arg(int(p)));
+        missingTools.removeAll(int(p));
+        done(true, false, QString());
+    }
+    QList<int> missingTools;
+    bool packageKit = true;
     void userMount(const QString &mountPoint, bool mount, Done done) override
     {
         calls.append((mount ? QStringLiteral("user-mount:") : QStringLiteral("user-umount:")) + mountPoint);
@@ -1041,7 +1088,7 @@ private Q_SLOTS:
         w.applyChanges();
         QCOMPARE(tested.count(), 1);
         QCOMPARE(tested.at(0).at(0).toInt(), 0);
-        QCOMPARE(src->calls, QStringList({QStringLiteral("mount:/mnt/nvme0n1p3"), QStringLiteral("unmount:/mnt/nvme0n1p3")}));
+        QCOMPARE(src->calls, QStringList({QStringLiteral("writefstab"), QStringLiteral("mount:/mnt/nvme0n1p3"), QStringLiteral("unmount:/mnt/nvme0n1p3")}));
 
         // A failing test mount offers Undo, which restores the backup just made.
         src->calls.clear();
@@ -1076,7 +1123,8 @@ private Q_SLOTS:
         w.applyChanges();
         auto *bar = w.findChild<KMessageWidget *>(QStringLiteral("remountBar"));
         QVERIFY(bar->isVisibleTo(&w));
-        QVERIFY(src->calls.isEmpty()); // mounted entries aren't touched
+        QCOMPARE(src->calls, QStringList{QStringLiteral("writefstab")}); // mounted entries aren't touched
+        src->calls.clear();
         screenshot(w, QStringLiteral("remount-bar"));
         bar->actions().first()->trigger();
         QCOMPARE(src->calls, QStringList({QStringLiteral("unmount:/mnt/win"), QStringLiteral("mount:/mnt/win")}));
@@ -1209,6 +1257,179 @@ private Q_SLOTS:
         QVERIFY(w.hasPendingChanges());
         QVERIFY(!w.pendingContent().contains("/mnt/Lingames"));
         QVERIFY(!banner->isVisibleTo(&w));
+    }
+
+    void typedPasswordsAreMovedForAdminsOnly()
+    {
+        const QByteArray lines = "//nas.local/Photos /mnt/photos cifs username=anna,password=s3cret,nofail 0 0\n"
+                                 "//nas.local/Music /mnt/music cifs password=nouser,nofail 0 0\n";
+        // A standard user isn't told.
+        {
+            MainWindow w(new FixtureSource(false, lines));
+            w.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&w));
+            QVERIFY(!w.findChild<KMessageWidget *>(QStringLiteral("banner"))->text().contains(QLatin1String("password")));
+            QVERIFY(!w.findChild<QAction *>(QStringLiteral("movePasswords"))->isVisible());
+        }
+        auto *src = new FixtureSource(true, lines);
+        MainWindow w(src);
+        w.resize(1280, 800);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        auto *banner = w.findChild<KMessageWidget *>(QStringLiteral("banner"));
+        QVERIFY(banner->text().contains(QLatin1String("2 entries store a password")));
+        screenshot(w, QStringLiteral("typed-passwords"));
+        bool ok = false;
+        clickInNextDialog(QStringLiteral("OK"), &ok);
+        QSignalSpy moved(&w, &MainWindow::passwordsMoved);
+        w.findChild<QAction *>(QStringLiteral("movePasswords"))->trigger();
+        QVERIFY(ok);
+        QCOMPARE(moved.count(), 1);
+        QCOMPARE(moved.at(0).at(0).toInt(), 1); // the one without a user name stays
+        QCOMPARE(src->savedLogins.size(), 1);
+        QCOMPARE(src->savedLogins[0].password, QStringLiteral("s3cret"));
+        const QByteArray out = w.pendingContent();
+        QVERIFY(!out.contains("s3cret"));
+        QVERIFY(out.contains("//nas.local/Photos /mnt/photos cifs credentials=/etc/anchorage/credentials/oarko-nas.local-anna,nofail 0 0"));
+        QVERIFY(out.contains("password=nouser"));
+    }
+
+    void connectToServerAndAddAnSmbShare()
+    {
+        auto *src = new FixtureSource(true);
+        MainWindow w(src);
+        w.resize(1280, 800);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        QDialog *dlg = nullptr;
+        connect(&w, &MainWindow::connectOpened, this, [&dlg](QDialog *d) { dlg = d; });
+        w.actionCollection()->action(QStringLiteral("connect_server"))->trigger();
+        QVERIFY(dlg);
+        auto *connectDlg = qobject_cast<ConnectDialog *>(dlg);
+        dlg->findChild<QLineEdit *>(QStringLiteral("connect.address"))->setText(QStringLiteral("smb://nas.example"));
+        // Without a login the NAS says so.
+        connectDlg->list();
+        QVERIFY(dlg->findChild<QLabel *>(QStringLiteral("connect.status"))->text().contains(QLatin1String("needs a user name")));
+        dlg->findChild<QLineEdit *>(QStringLiteral("connect.user"))->setText(QStringLiteral("test"));
+        dlg->findChild<QLineEdit *>(QStringLiteral("connect.password"))->setText(QStringLiteral("pa ss"));
+        connectDlg->list();
+        auto *tree = dlg->findChild<QTreeWidget *>(QStringLiteral("connect.shares"));
+        QCOMPARE(tree->topLevelItemCount(), 1); // smb:// typed: SMB only
+        QCOMPARE(tree->topLevelItem(0)->childCount(), 2);
+        tree->setCurrentItem(tree->topLevelItem(0)->child(0));
+        screenshot(*dlg, QStringLiteral("connect"));
+        EntryEditor *e = openEditor(w, [dlg] { dlg->findChild<QPushButton *>(QStringLiteral("connect.add"))->click(); });
+        QVERIFY(e);
+        QCOMPARE(e->entry().spec, QStringLiteral("//nas.example/test_share"));
+        QCOMPARE(e->entry().type, QStringLiteral("cifs"));
+        QCOMPARE(e->entry().mountPoint, QStringLiteral("/mnt/test_share"));
+        QVERIFY(e->entry().options.contains(QStringLiteral("credentials=/etc/anchorage/credentials/oarko-nas.example-test")));
+        QVERIFY(!e->entry().options.join(QLatin1Char(',')).contains(QLatin1String("pa ss"))); // never in fstab
+        QCOMPARE(e->findChild<QLineEdit *>(QStringLiteral("editor.loginUser"))->text(), QStringLiteral("test"));
+        QVERIFY(e->pendingLogin().has_value());
+        screenshot(*e, QStringLiteral("editor-smb"));
+        e->accept();
+        QCoreApplication::processEvents();
+        QVERIFY(w.pendingContent().contains("//nas.example/test_share"));
+        QVERIFY(!w.pendingContent().contains("pa ss"));
+
+        // Apply: the login is saved first, then fstab.
+        src->calls.clear();
+        w.applyChanges();
+        QCOMPARE(src->calls.mid(0, 2), QStringList({QStringLiteral("savelogin:nas.example"), QStringLiteral("writefstab")}));
+        QCOMPARE(src->savedLogins.last().password, QStringLiteral("pa ss"));
+        QVERIFY(!src->onDisk().contains("pa ss"));
+    }
+
+    void nfsExportWithVersionChoice()
+    {
+        auto *src = new FixtureSource(true);
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        QDialog *dlg = nullptr;
+        connect(&w, &MainWindow::connectOpened, this, [&dlg](QDialog *d) { dlg = d; });
+        w.connectToServer();
+        dlg->findChild<QLineEdit *>(QStringLiteral("connect.address"))->setText(QStringLiteral("nas.example"));
+        auto *protocol = dlg->findChild<QComboBox *>(QStringLiteral("connect.protocol"));
+        protocol->setCurrentIndex(2); // NFS
+        qobject_cast<ConnectDialog *>(dlg)->list();
+        auto *tree = dlg->findChild<QTreeWidget *>(QStringLiteral("connect.shares"));
+        QCOMPARE(tree->topLevelItemCount(), 1);
+        QVERIFY(tree->topLevelItem(0)->text(1).contains(QLatin1String("Offers NFS 4 and 3")));
+        tree->setCurrentItem(tree->topLevelItem(0)->child(0));
+        EntryEditor *e = openEditor(w, [dlg] { dlg->findChild<QPushButton *>(QStringLiteral("connect.add"))->click(); });
+        QCOMPARE(e->entry().spec, QStringLiteral("nas.example:/mnt/NAS_Pool/TVshows"));
+        QCOMPARE(e->entry().type, QStringLiteral("nfs")); // Automatic, not nfs4
+        QCOMPARE(e->entry().mountPoint, QStringLiteral("/mnt/TVshows"));
+        QVERIFY(e->findChild<QLabel *>(QStringLiteral("editor.nfsOffered"))->text().contains(QLatin1String("4 and 3")));
+        auto *ver = e->findChild<QComboBox *>(QStringLiteral("editor.nfsVersion"));
+        ver->setCurrentIndex(ver->findData(QStringLiteral("4.2")));
+        Q_EMIT ver->activated(ver->currentIndex());
+        QVERIFY(e->entry().options.contains(QStringLiteral("vers=4.2")));
+        QVERIFY(!e->findChild<QLabel *>(QStringLiteral("editor.issues"))->text().contains(QLatin1String("doesn't offer")));
+        screenshot(*e, QStringLiteral("editor-nfs"));
+        ver->setCurrentIndex(0);
+        Q_EMIT ver->activated(0);
+        QVERIFY(!e->entry().options.join(QLatin1Char(',')).contains(QLatin1String("vers=")));
+        e->reject();
+    }
+
+    void missingClientToolsAreOffered()
+    {
+        auto *src = new FixtureSource(true, "//nas/x /mnt/x cifs guest,nofail 0 0\n");
+        src->missingTools = {int(clienttools::Protocol::Smb)};
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        selectTile(w, QStringLiteral("x"));
+        EntryEditor *e = openEditor(w, [&w] { w.editSelected(); });
+        advancedRow(e, QStringLiteral("noatime"))->setCheckState(0, Qt::Checked);
+        e->accept();
+        QCoreApplication::processEvents();
+        // Copy Command: nothing is saved, the command is on the clipboard.
+        bool clicked = false;
+        clickInNextDialog(QStringLiteral("Copy Command"), &clicked);
+        w.applyChanges();
+        QVERIFY(clicked);
+        QVERIFY(src->writes.isEmpty());
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("sudo apt install cifs-utils"));
+        // Install: PackageKit installs it, then the save goes ahead.
+        clickInNextDialog(QStringLiteral("Install"), &clicked);
+        w.applyChanges();
+        QVERIFY(clicked);
+        QVERIFY(src->calls.contains(QStringLiteral("install:%1").arg(int(clienttools::Protocol::Smb))));
+        QCOMPARE(src->writes.size(), 1);
+    }
+
+    void mountAShareAtAFolder()
+    {
+        auto *src = new FixtureSource(true);
+        MainWindow w(src);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        QDialog *dlg = nullptr;
+        connect(&w, &MainWindow::connectOpened, this, [&dlg](QDialog *d) { dlg = d; });
+        QDialog *mountAt = nullptr;
+        connect(&w, &MainWindow::mountAtOpened, this, [&mountAt](QDialog *d) { mountAt = d; });
+        w.connectToServer();
+        dlg->findChild<QLineEdit *>(QStringLiteral("connect.address"))->setText(QStringLiteral("//nas.example"));
+        dlg->findChild<QLineEdit *>(QStringLiteral("connect.user"))->setText(QStringLiteral("test"));
+        dlg->findChild<QLineEdit *>(QStringLiteral("connect.password"))->setText(QStringLiteral("secret"));
+        qobject_cast<ConnectDialog *>(dlg)->list();
+        auto *tree = dlg->findChild<QTreeWidget *>(QStringLiteral("connect.shares"));
+        tree->setCurrentItem(tree->topLevelItem(0)->child(1)); // Media
+        dlg->findChild<QPushButton *>(QStringLiteral("connect.mountAt"))->click();
+        QVERIFY(mountAt);
+        QCOMPARE(src->savedLogins.size(), 1); // saved first, never on a command line
+        mountAt->accept();
+        QCoreApplication::processEvents();
+        QCOMPARE(src->temporary.size(), 1);
+        const auto &t = src->temporary[0].entry;
+        QCOMPARE(t.spec, QStringLiteral("//nas.example/Media"));
+        QVERIFY(t.options.contains(QStringLiteral("credentials=/etc/anchorage/credentials/oarko-nas.example-test")));
+        QVERIFY(t.options.contains(QStringLiteral("uid=1000")));
+        QVERIFY(!t.options.join(QLatin1Char(',')).contains(QLatin1String("secret")));
     }
 };
 

@@ -3,6 +3,8 @@ add_library(anchorage_ui STATIC
     anchorage.qrc
     backupspage.cpp
     backupspage.h
+    connectdialog.cpp
+    connectdialog.h
     datasource.cpp
     datasource.h
     entryeditor.cpp
@@ -39,6 +41,7 @@ target_link_libraries(anchorage_ui
         KF6::ItemViews
         KF6::ColorScheme
         KF6::Solid
+        Qt6::Concurrent
     PRIVATE
         anchorage_hardening
 )

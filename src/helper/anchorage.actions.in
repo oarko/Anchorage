@@ -49,3 +49,9 @@ Name=Unmount a drive or share
 Description=Unmounting a drive or network share requires authentication
 Policy=auth_admin
 Persistence=session
+
+[@APP_ID@.writecredentials]
+Name=Save a login for a network share
+Description=Saving a login for a network share requires authentication
+Policy=auth_admin
+Persistence=session
