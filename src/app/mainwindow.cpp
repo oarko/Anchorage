@@ -15,6 +15,10 @@
 #include "mountplan.h"
 #include "access.h"
 #include "binds.h"
+#include "secrets.h"
+#include "clienttools.h"
+#include "connectdialog.h"
+#include "mounterrors.h"
 #include "options.h"
 #include "tiledelegate.h"
 
@@ -109,6 +113,11 @@ MainWindow::MainWindow(DataSource *source, QWidget *parent)
     m_removeOrphansAction->setObjectName(QStringLiteral("removeOrphans"));
     m_removeOrphansAction->setVisible(false);
     m_banner->addAction(m_removeOrphansAction);
+    m_movePasswordsAction = new QAction(QIcon::fromTheme(QStringLiteral("security-high")), i18n("Move to a Safe File"), this);
+    m_movePasswordsAction->setObjectName(QStringLiteral("movePasswords"));
+    m_movePasswordsAction->setVisible(false);
+    m_banner->addAction(m_movePasswordsAction);
+    connect(m_movePasswordsAction, &QAction::triggered, this, &MainWindow::movePasswords);
     connect(m_removeOrphansAction, &QAction::triggered, this, [this] {
         fstab::File file = fstab::File::parse(currentContent());
         QList<int> lines = binds::orphaned(file);
@@ -237,6 +246,9 @@ void MainWindow::setupActions()
     m_unmountAction = ac->addAction(QStringLiteral("unmount"), this, &MainWindow::unmountSelected);
     m_unmountAction->setText(i18n("Unmount"));
     m_unmountAction->setIcon(QIcon::fromTheme(QStringLiteral("media-eject")));
+    m_connectAction = ac->addAction(QStringLiteral("connect_server"), this, &MainWindow::connectToServer);
+    m_connectAction->setText(i18n("Connect to Server…"));
+    m_connectAction->setIcon(QIcon::fromTheme(QStringLiteral("network-connect")));
     m_mountAtAction = ac->addAction(QStringLiteral("mount_at"), this, &MainWindow::mountAtSelected);
     m_mountAtAction->setText(i18n("Mount At…"));
     m_mountAtAction->setIcon(QIcon::fromTheme(QStringLiteral("media-mount")));
@@ -345,10 +357,17 @@ void MainWindow::updateBanners()
         problems.append(i18np("%1 place shows a drive that is no longer in /etc/fstab. It isn't mounted at start-up.",
                               "%1 places show a drive that is no longer in /etc/fstab. They aren't mounted at start-up.", int(orphans.size())));
     }
+    // Only those who can fix it are told; standard users aren't pointed at the password.
+    const int typed = m_snapshot.me.fullAccess() ? int(secrets::find(file).size()) : 0;
+    if (typed > 0) {
+        problems.append(i18np("%1 entry stores a password in /etc/fstab, which every user can read.",
+                              "%1 entries store a password in /etc/fstab, which every user can read.", typed));
+    }
     m_banner->setMessageType(KMessageWidget::Warning);
     m_banner->setText(problems.join(QLatin1Char('\n')));
     m_banner->setVisible(!problems.isEmpty());
     m_removeOrphansAction->setVisible(!orphans.isEmpty());
+    m_movePasswordsAction->setVisible(typed > 0 && !m_applying);
 
     if (m_pending) {
         const int n = linediff::changeCount(linediff::diff(m_baseline, *m_pending));
@@ -586,6 +605,9 @@ void MainWindow::editItem(const inventory::Item &item)
         if (!binds::isBind(editor->entry()) && !binds::apply(f, oldMountPoint, editor->entry(), editor->binds())) {
             return;
         }
+        if (const auto login = editor->pendingLogin()) {
+            m_pendingLogins.insert(editor->entry().mountPoint, *login);
+        }
         setPending(f.serialize());
     });
     Q_EMIT editorOpened(editor);
@@ -640,6 +662,7 @@ void MainWindow::removeSelected()
 void MainWindow::discardChanges()
 {
     m_pending.reset();
+    m_pendingLogins.clear(); // forget typed passwords
     rebuild();
 }
 
@@ -711,6 +734,15 @@ void MainWindow::applyChanges()
         return;
     }
 
+    QStringList types;
+    for (const auto &e : std::as_const(plan.added)) {
+        types.append(e.type);
+    }
+    ensureClientTools(types, [this, proposed, confirm, plan] {
+        writePendingLogins([this, proposed, confirm, plan](bool ok) {
+            if (!ok) {
+                return;
+            }
     m_applying = true;
     updateActions();
     statusBar()->showMessage(i18n("Saving /etc/fstab…"));
@@ -735,6 +767,8 @@ void MainWindow::applyChanges()
             break;
         }
         Q_EMIT applyFinished(reply.ok());
+    });
+        });
     });
 }
 
@@ -911,21 +945,30 @@ void MainWindow::mountSelected()
     const inventory::Item item = *it;
     const MountChoices mc = mountChoices(item);
     const QString mp = item.entry->mountPoint;
-    const auto done = [this, mp](const client::Reply &reply) {
+    const QString fsType = item.entry->type;
+    const auto done = [this, mp, fsType](const client::Reply &reply) {
         if (reply.ok()) {
             statusBar()->showMessage(i18n("Mounted %1.", mp), 8000);
             reload();
         } else {
-            showHelperError(reply, i18n("%1 was not mounted.", mp));
+            client::Reply explained = reply;
+            const QString why = mounterrors::explain(fsType, reply.message);
+            if (!why.isEmpty()) {
+                explained.message += QStringLiteral("\n\n") + why;
+            }
+            showHelperError(explained, i18n("%1 was not mounted.", mp));
         }
         Q_EMIT mountFinished(reply.ok());
     };
-    statusBar()->showMessage(i18n("Mounting %1…", mp));
-    if (mc.mount == Route::AsUser) {
-        m_source->userMount(mp, true, done);
-    } else if (mc.mount == Route::Helper) {
-        m_source->mountEntry(mp, this, done);
-    }
+    const auto run = [this, mc, mp, done] {
+        statusBar()->showMessage(i18n("Mounting %1…", mp));
+        if (mc.mount == Route::AsUser) {
+            m_source->userMount(mp, true, done);
+        } else if (mc.mount == Route::Helper) {
+            m_source->mountEntry(mp, this, done);
+        }
+    };
+    ensureClientTools({item.entry->type}, run);
 }
 
 void MainWindow::unmountSelected()
@@ -1109,7 +1152,8 @@ void MainWindow::testMount(const QList<fstab::Entry> &entries, const QString &ba
         statusBar()->showMessage(i18n("Test mounting %1…", e.mountPoint));
         m_source->mountEntry(e.mountPoint, this, [this, state, step, e](const client::Reply &reply) {
             if (!reply.ok()) {
-                state->failures.append(QStringLiteral("%1: %2").arg(e.mountPoint, reply.message));
+                const QString why = mounterrors::explain(e.type, reply.message);
+                state->failures.append(QStringLiteral("%1: %2%3").arg(e.mountPoint, reply.message, why.isEmpty() ? QString() : QStringLiteral(" — ") + why));
                 (*step)();
                 return;
             }
@@ -1149,6 +1193,261 @@ void MainWindow::remountChanged()
             });
         });
     }
+}
+
+void MainWindow::movePasswords()
+{
+    if (!m_snapshot.me.fullAccess() || m_applying) {
+        return;
+    }
+    const fstab::File file = fstab::File::parse(currentContent());
+    QList<secrets::Plaintext> todo;
+    QStringList skipped;
+    for (const auto &p : secrets::find(file)) {
+        const auto &e = file.lines().at(static_cast<std::size_t>(p.line)).entry;
+        if (!e) {
+            continue;
+        }
+        if (p.server.isEmpty() || p.user.isEmpty()) {
+            skipped.append(e->mountPoint); // a saved login needs a server and a user name
+        } else {
+            todo.append(p);
+        }
+    }
+    if (todo.isEmpty()) {
+        if (!skipped.isEmpty()) {
+            KMessageBox::information(this, i18n("These entries have a password but no user name, so they can't be moved automatically: %1. Edit them "
+                                                "and choose a login.",
+                                                skipped.join(QStringLiteral(", "))));
+        }
+        return;
+    }
+    // Save the logins one after the other (one password prompt), then change the lines.
+    struct State {
+        QList<secrets::Plaintext> left;
+        QHash<int, QString> paths; // line -> saved login
+        QStringList errors;
+    };
+    auto state = std::make_shared<State>(State{todo, {}, {}});
+    auto step = std::make_shared<std::function<void()>>();
+    *step = [this, state, step, skipped] {
+        if (state->left.isEmpty()) {
+            fstab::File f = fstab::File::parse(currentContent());
+            for (auto it = state->paths.cbegin(); it != state->paths.cend(); ++it) {
+                const auto &entry = f.lines().at(static_cast<std::size_t>(it.key())).entry;
+                if (entry) {
+                    f.replace(it.key(), secrets::withCredentials(*entry, it.value()));
+                }
+            }
+            if (!state->paths.isEmpty()) {
+                setPending(f.serialize());
+            }
+            QString text;
+            if (!state->paths.isEmpty()) {
+                text = i18np("The login of %1 entry is saved in a file only root can read. Click Apply to remove the password from /etc/fstab "
+                             "and from its backups.<br><br>Until now every user on this computer could read it, so consider changing the "
+                             "password on the server too.",
+                             "The logins of %1 entries are saved in files only root can read. Click Apply to remove the passwords from "
+                             "/etc/fstab and from its backups.<br><br>Until now every user on this computer could read them, so consider "
+                             "changing those passwords on the server too.",
+                             int(state->paths.size()));
+            }
+            if (!state->errors.isEmpty()) {
+                text += QStringLiteral("<br><br>") + i18n("Not moved: %1", state->errors.join(QStringLiteral("; ")).toHtmlEscaped());
+            }
+            if (!skipped.isEmpty()) {
+                text += QStringLiteral("<br><br>") + i18n("No user name, so not moved: %1", skipped.join(QStringLiteral(", ")));
+            }
+            KMessageBox::information(this, text, i18n("Passwords Moved"));
+            Q_EMIT passwordsMoved(int(state->paths.size()));
+            *step = nullptr;
+            return;
+        }
+        const secrets::Plaintext p = state->left.takeFirst();
+        m_source->writeCredentials({p.server, p.user, p.password, p.domain}, this, [state, step, p](const client::Reply &reply) {
+            if (reply.ok()) {
+                state->paths.insert(p.line, reply.data.value(QStringLiteral("path")).toString());
+            } else if (reply.status == client::Reply::Status::Failed) {
+                state->errors.append(reply.message);
+            } else {
+                state->left.clear(); // cancelled or denied: stop asking
+            }
+            (*step)();
+        });
+    };
+    (*step)();
+}
+
+void MainWindow::ensureClientTools(const QStringList &types, const std::function<void()> &then)
+{
+    QList<clienttools::Protocol> missing;
+    for (const QString &t : types) {
+        clienttools::Protocol p;
+        if (clienttools::protocolFor(t, &p) && !missing.contains(p) && !m_source->toolInstalled(p)) {
+            missing.append(p);
+        }
+    }
+    if (missing.isEmpty()) {
+        then();
+        return;
+    }
+    const clienttools::Protocol p = missing.first();
+    const QString what = p == clienttools::Protocol::Smb ? i18n("SMB (Windows/Samba) shares") : i18n("NFS shares");
+    const QString command = m_source->installCommand(p);
+    const QString text = i18n("Mounting %1 needs a program that isn't installed on this computer.<br><br>To install it yourself:<br><tt>%2</tt>", what,
+                              command.toHtmlEscaped());
+    const auto rest = [this, types, then] {
+        ensureClientTools(types, then); // the next missing one, if any
+    };
+    if (m_source->canInstall()) {
+        const auto answer = KMessageBox::questionTwoActionsCancel(this, text, i18n("Program Missing"),
+                                                                  KGuiItem(i18n("Install"), QStringLiteral("run-install")),
+                                                                  KGuiItem(i18n("Copy Command"), QStringLiteral("edit-copy")));
+        if (answer == KMessageBox::PrimaryAction) {
+            statusBar()->showMessage(i18n("Installing…"));
+            m_source->installTool(p, [this, rest](bool ok, bool cancelled, const QString &message) {
+                statusBar()->clearMessage();
+                if (ok) {
+                    rest();
+                } else if (!cancelled) {
+                    KMessageBox::detailedError(this, i18n("The program could not be installed."), message);
+                }
+            });
+        } else if (answer == KMessageBox::SecondaryAction) {
+            QApplication::clipboard()->setText(command);
+        }
+        return;
+    }
+    if (KMessageBox::questionTwoActions(this, text, i18n("Program Missing"), KGuiItem(i18n("Copy Command"), QStringLiteral("edit-copy")),
+                                        KStandardGuiItem::cancel())
+        == KMessageBox::PrimaryAction) {
+        QApplication::clipboard()->setText(command);
+    }
+}
+
+void MainWindow::writePendingLogins(const std::function<void(bool ok)> &then)
+{
+    // Only logins whose entry is still in the file to be saved.
+    QList<service::SavedLogin> todo;
+    const fstab::File file = fstab::File::parse(currentContent());
+    for (auto it = m_pendingLogins.cbegin(); it != m_pendingLogins.cend(); ++it) {
+        if (file.findMountPoint(it.key()) >= 0) {
+            todo.append(it.value());
+        }
+    }
+    if (todo.isEmpty()) {
+        then(true);
+        return;
+    }
+    auto left = std::make_shared<QList<service::SavedLogin>>(todo);
+    auto step = std::make_shared<std::function<void()>>();
+    *step = [this, left, step, then] {
+        if (left->isEmpty()) {
+            m_pendingLogins.clear(); // saved: don't keep the passwords in memory
+            then(true);
+            *step = nullptr;
+            return;
+        }
+        const service::SavedLogin l = left->takeFirst();
+        statusBar()->showMessage(i18n("Saving the login for %1…", l.server));
+        m_source->writeCredentials({l.server, l.user, l.password, l.domain}, this, [this, step, then](const client::Reply &reply) {
+            if (!reply.ok()) {
+                showHelperError(reply, i18n("The login could not be saved, so /etc/fstab was not changed."));
+                then(false);
+                *step = nullptr;
+                return;
+            }
+            (*step)();
+        });
+    };
+    (*step)();
+}
+
+void MainWindow::connectToServer()
+{
+    auto *dlg = new ConnectDialog(m_source, m_snapshot.me.fullAccess(), this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->onAddToFstab = [this](const ConnectDialog::Choice &c) {
+        openShareEditor(c.entry, c.login, c.guest, c.nfsVersions);
+    };
+    dlg->onMountAt = [this](const ConnectDialog::Choice &c) {
+        mountShareAt(c.entry, c.login, c.guest);
+    };
+    Q_EMIT connectOpened(dlg);
+    dlg->open();
+}
+
+void MainWindow::openShareEditor(const fstab::Entry &entry, const std::optional<shares::Login> &login, bool guest, const QList<int> &nfsVersions)
+{
+    EditorContext ctx = editorContext(-1);
+    ctx.login = login;
+    ctx.guest = guest;
+    ctx.nfsVersions = nfsVersions;
+    auto *editor = new EntryEditor(entry, true, ctx, nullptr, this);
+    editor->setAttribute(Qt::WA_DeleteOnClose);
+    connect(editor, &QDialog::accepted, this, [this, editor] {
+        fstab::File file = fstab::File::parse(currentContent());
+        const int line = file.append(editor->entry());
+        if (line < 0 || !binds::apply(file, QString(), editor->entry(), editor->binds())) {
+            return;
+        }
+        if (const auto l = editor->pendingLogin()) {
+            m_pendingLogins.insert(editor->entry().mountPoint, *l);
+        }
+        m_selectedId = QStringLiteral("fstab:%1").arg(line);
+        setPending(file.serialize());
+    });
+    Q_EMIT editorOpened(editor);
+    editor->open();
+}
+
+void MainWindow::mountShareAt(const fstab::Entry &share, const std::optional<shares::Login> &login, bool guest)
+{
+    // Like Mount At… for drives: a folder of your choice until restart; fstab unchanged.
+    const auto withLogin = [this, share](const QStringList &loginOptions) {
+        fstab::Entry e = share;
+        e.options = loginOptions;
+        auto *dlg = new MountAtDialog(e, share.spec, m_snapshot, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dlg, &QDialog::accepted, this, [this, dlg] {
+            const fstab::Entry wanted = dlg->entry();
+            ensureClientTools({wanted.type}, [this, wanted] {
+                m_source->mountTemporary({wanted, false}, this, [this, wanted](const client::Reply &reply) {
+                    if (reply.ok()) {
+                        statusBar()->showMessage(i18n("Mounted at %1 until it is unmounted or the computer restarts.", wanted.mountPoint), 10000);
+                        reload();
+                    } else {
+                        client::Reply explained = reply;
+                        const QString why = mounterrors::explain(wanted.type, reply.message);
+                        if (!why.isEmpty()) {
+                            explained.message += QStringLiteral("\n\n") + why;
+                        }
+                        showHelperError(explained, i18n("Nothing was mounted at %1.", wanted.mountPoint));
+                    }
+                    Q_EMIT mountFinished(reply.ok());
+                });
+            });
+        });
+        Q_EMIT mountAtOpened(dlg);
+        dlg->open();
+    };
+    if (share.type != QLatin1String("cifs") && share.type != QLatin1String("smb3")) {
+        withLogin({QStringLiteral("nofail")});
+        return;
+    }
+    if (guest || !login) {
+        withLogin({QStringLiteral("guest")});
+        return;
+    }
+    // The password goes into a root-only saved login first, never onto a command line.
+    const QString server = share.spec.mid(2).section(QLatin1Char('/'), 0, 0);
+    m_source->writeCredentials({server, login->user, login->password, login->domain}, this, [this, withLogin](const client::Reply &reply) {
+        if (!reply.ok()) {
+            showHelperError(reply, i18n("The login could not be saved."));
+            return;
+        }
+        withLogin({QStringLiteral("credentials=") + reply.data.value(QStringLiteral("path")).toString()});
+    });
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

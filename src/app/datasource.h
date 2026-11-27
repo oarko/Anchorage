@@ -3,7 +3,9 @@
 
 #include "caller.h"
 #include "drives.h"
+#include "clienttools.h"
 #include "helperclient.h"
+#include "shares.h"
 #include "requests.h"
 #include "settings.h"
 #include "verify.h"
@@ -44,6 +46,16 @@ struct Snapshot {
     anchorage::settings::Settings settings; // /etc/anchorage/config
 };
 
+// What a server offers (Connect to Server, SPEC §11).
+struct Browse {
+    anchorage::shares::SmbList smb; // shares, or why not
+    bool smbTried = false;
+    QList<anchorage::shares::Share> nfs;
+    QString nfsError;
+    bool nfsTried = false;
+    QList<int> nfsVersions; // e.g. {4, 3}; empty if unknown
+};
+
 // Where the data comes from: the real system, or fixtures in tests.
 class DataSource : public QObject
 {
@@ -62,6 +74,17 @@ public:
     virtual void mountEntry(const QString &mountPoint, QWidget *window, Done done) = 0;
     virtual void mountTemporary(const anchorage::requests::TemporaryMount &request, QWidget *window, Done done) = 0;
     virtual void unmount(const anchorage::requests::Unmount &request, QWidget *window, Done done) = 0;
+    // Saves an SMB login as a root-only file (SPEC §11). Reply data: "path".
+    virtual void writeCredentials(const anchorage::requests::Credentials &request, QWidget *window, Done done) = 0;
+    // Lists what `host` offers over SMB and/or NFS, off the GUI thread. `done` runs once.
+    using BrowseDone = std::function<void(const Browse &)>;
+    virtual void browse(const QString &host, bool smb, bool nfs, const anchorage::shares::Login &login, BrowseDone done) = 0;
+    // Client tools for mounting shares (mount.cifs, mount.nfs).
+    virtual bool toolInstalled(anchorage::clienttools::Protocol protocol) = 0;
+    virtual QString installCommand(anchorage::clienttools::Protocol protocol) = 0;
+    virtual bool canInstall() = 0; // PackageKit available
+    using InstallDone = std::function<void(bool ok, bool cancelled, const QString &message)>;
+    virtual void installTool(anchorage::clienttools::Protocol protocol, InstallDone done) = 0;
     // Entries marked "any user": /usr/bin/mount and /usr/bin/umount run as the person.
     virtual void userMount(const QString &mountPoint, bool mount, Done done) = 0;
     // findmnt --verify on a proposed file (SPEC §9 "Validate before writing").
@@ -91,6 +114,12 @@ public:
     void mountTemporary(const anchorage::requests::TemporaryMount &request, QWidget *window, Done done) override;
     void unmount(const anchorage::requests::Unmount &request, QWidget *window, Done done) override;
     void userMount(const QString &mountPoint, bool mount, Done done) override;
+    void writeCredentials(const anchorage::requests::Credentials &request, QWidget *window, Done done) override;
+    void browse(const QString &host, bool smb, bool nfs, const anchorage::shares::Login &login, BrowseDone done) override;
+    bool toolInstalled(anchorage::clienttools::Protocol protocol) override;
+    QString installCommand(anchorage::clienttools::Protocol protocol) override;
+    bool canInstall() override;
+    void installTool(anchorage::clienttools::Protocol protocol, InstallDone done) override;
     QList<anchorage::verify::Finding> verify(const QByteArray &content) override;
 
 private:

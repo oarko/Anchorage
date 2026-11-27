@@ -27,6 +27,7 @@ step "Copying the source into the VM"
 "$vm" sync
 
 step "Building and installing Anchorage in the VM"
+"$vm" deps
 "$vm" ssh -o BatchMode=yes 'set -e
   cmake -S ~/src -B ~/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr \
         -DBUILD_TESTING=OFF -DANCHORAGE_E2E=ON >/dev/null

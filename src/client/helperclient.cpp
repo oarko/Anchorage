@@ -101,6 +101,8 @@ QString actionId(Action action)
         return prefix + QStringLiteral("mounttemporary");
     case Action::Unmount:
         return prefix + QStringLiteral("unmount");
+    case Action::WriteCredentials:
+        return prefix + QStringLiteral("writecredentials");
     }
     return {};
 }

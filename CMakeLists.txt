@@ -46,7 +46,7 @@ if(ANCHORAGE_FUZZ)
 endif()
 include(AnchorageHardening)
 
-find_package(Qt6 ${QT_MIN_VERSION} REQUIRED COMPONENTS Core DBus Widgets Test)
+find_package(Qt6 ${QT_MIN_VERSION} REQUIRED COMPONENTS Core Concurrent DBus Widgets Test)
 find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS
     CoreAddons
     I18n

@@ -22,6 +22,10 @@ const QString kBackup = QStringLiteral("backup");
 const QString kKeepBackups = QStringLiteral("keepBackups");
 const QString kNtfsDriver = QStringLiteral("ntfsDriver");
 const QString kConfirmSystem = QStringLiteral("confirmSystem");
+const QString kServer = QStringLiteral("server");
+const QString kUser = QStringLiteral("user");
+const QString kPassword = QStringLiteral("password");
+const QString kDomain = QStringLiteral("domain");
 
 // Every key present, nothing else.
 QString checkKeys(const QVariantMap &args, const QStringList &required, const QStringList &optional = {})
@@ -167,6 +171,25 @@ Result<Unmount> decodeUnmount(const QVariantMap &args)
         return R::failure(QStringLiteral("Request fields have the wrong type."));
     }
     return Unmount{args[kMountPoint].toString(), args[kConfirmSystem].toBool()};
+}
+
+Result<Credentials> decodeCredentials(const QVariantMap &args)
+{
+    using R = Result<Credentials>;
+    if (const QString e = checkKeys(args, {kServer, kUser, kPassword, kDomain}); !e.isEmpty()) {
+        return R::failure(e);
+    }
+    for (const QString &k : {kServer, kUser, kPassword, kDomain}) {
+        if (!is(args[k], QMetaType::QString)) {
+            return R::failure(QStringLiteral("Request fields have the wrong type."));
+        }
+    }
+    return Credentials{args[kServer].toString(), args[kUser].toString(), args[kPassword].toString(), args[kDomain].toString()};
+}
+
+QVariantMap encodeCredentials(const Credentials &c)
+{
+    return {{kServer, c.server}, {kUser, c.user}, {kPassword, c.password}, {kDomain, c.domain}};
 }
 
 QVariantMap encodeTemporaryMount(const TemporaryMount &t)

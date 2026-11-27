@@ -8,6 +8,8 @@ ecm_add_tests(
     optionstest.cpp
     mountplantest.cpp
     bindtest.cpp
+    clienttoolstest.cpp
+    secretstest.cpp
     LINK_LIBRARIES anchorage_core anchorage_hardening Qt6::Test
 )
 
@@ -21,3 +23,7 @@ endforeach()
 ecm_add_test(mounttest.cpp LINK_LIBRARIES anchorage_core anchorage_hardening Qt6::Test)
 
 set_tests_properties(guitest PROPERTIES ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/guitest.lsan.supp:print_suppressions=0")
+
+# Share listing (SMB through libsmbclient, NFS through showmount). The live part needs
+# ANCHORAGE_NAS_ENV; without it, it is skipped.
+ecm_add_test(sharestest.cpp LINK_LIBRARIES anchorage_client anchorage_hardening Qt6::Test)

@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE gui SYSTEM "kpartgui.dtd">
-<gui name="anchorage" version="3">
+<gui name="anchorage" version="4">
   <MenuBar>
     <Menu name="file">
       <text>&amp;File</text>
       <Action name="entry_new"/>
+      <Action name="connect_server"/>
       <Separator/>
       <Action name="changes_apply"/>
       <Action name="changes_preview"/>
@@ -25,6 +26,7 @@
   <ToolBar name="mainToolBar">
     <text>Main Toolbar</text>
     <Action name="entry_new"/>
+    <Action name="connect_server"/>
     <Action name="entry_edit"/>
     <Action name="entry_remove"/>
     <Separator/>

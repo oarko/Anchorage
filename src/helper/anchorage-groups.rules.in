@@ -8,7 +8,7 @@ polkit.addRule(function (action, subject) {
         return polkit.Result.NOT_HANDLED;
     }
     var name = action.id.substring(prefix.length);
-    var shared = (name === "addsharedmount" || name === "removesharedmount");
+    var shared = (name === "addsharedmount" || name === "removesharedmount" || name === "writecredentials");
     var full = shared || name === "writefstab" || name === "restorebackup" || name === "writesettings"
         || name === "mountentry" || name === "mounttemporary" || name === "unmount";
 

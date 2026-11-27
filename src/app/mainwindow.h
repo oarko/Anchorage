@@ -4,6 +4,8 @@
 #include "datasource.h"
 #include "inventory.h"
 #include "mountpolicy.h"
+#include "fstabservice.h"
+#include "shares.h"
 
 #include <KXmlGuiWindow>
 
@@ -55,6 +57,8 @@ public:
     void unmountSelected();
     void mountAtSelected();
     void remountChanged();
+    void movePasswords(); // typed-in SMB passwords -> root-only saved logins (SPEC §11)
+    void connectToServer();
 
 Q_SIGNALS:
     // An editor dialog was created (tests use this to drive it).
@@ -67,6 +71,8 @@ Q_SIGNALS:
     void mountFinished(bool ok);
     // After Apply: how many test mounts failed (-1: none were needed).
     void testMountFinished(int failures);
+    void passwordsMoved(int count);
+    void connectOpened(QDialog *dialog);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -101,6 +107,12 @@ private:
     MountChoices mountChoices(const anchorage::inventory::Item &item) const;
     void runUnmount(const anchorage::inventory::Item &item, Route route, bool confirmSystem);
     void testMount(const QList<anchorage::fstab::Entry> &entries, const QString &backup);
+    // Makes sure mount.cifs / mount.nfs exist for these file system types (offers to install
+    // them), then runs `then`. Does nothing if the person cancels.
+    void ensureClientTools(const QStringList &types, const std::function<void()> &then);
+    void openShareEditor(const anchorage::fstab::Entry &entry, const std::optional<anchorage::shares::Login> &login, bool guest, const QList<int> &nfsVersions);
+    void mountShareAt(const anchorage::fstab::Entry &entry, const std::optional<anchorage::shares::Login> &login, bool guest);
+    void writePendingLogins(const std::function<void(bool ok)> &then);
 
     DataSource *m_source;
     Snapshot m_snapshot;
@@ -122,6 +134,8 @@ private:
     KMessageWidget *m_applyBar;
     KMessageWidget *m_remountBar;
     QStringList m_toRemount; // changed entries that were mounted while saving
+    // SMB logins typed in the editor, saved (root-only) when applying: mount point -> login.
+    QHash<QString, anchorage::service::SavedLogin> m_pendingLogins;
     QLabel *m_breadcrumb;
     QLineEdit *m_search;
     QLabel *m_statusLeft;
@@ -138,5 +152,7 @@ private:
     QAction *m_unmountAction = nullptr;
     QAction *m_mountAtAction = nullptr;
     QAction *m_removeOrphansAction = nullptr;
+    QAction *m_movePasswordsAction = nullptr;
+    QAction *m_connectAction = nullptr;
     KToggleAction *m_systemAction = nullptr;
 };

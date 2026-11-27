@@ -101,7 +101,7 @@ The full design, including every agreed decision, is in [`docs/SPEC.md`](docs/SP
 ```sh
 sudo apt install build-essential cmake ninja-build extra-cmake-modules qt6-base-dev qt6-tools-dev \
   libkf6coreaddons-dev libkf6i18n-dev libkf6xmlgui-dev libkf6widgetsaddons-dev libkf6auth-dev \
-  libkf6itemviews-dev libkf6colorscheme-dev libkf6solid-dev
+  libkf6itemviews-dev libkf6colorscheme-dev libkf6solid-dev pkg-config libsmbclient-dev
 ```
 
 ```sh

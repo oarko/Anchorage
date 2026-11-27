@@ -17,10 +17,30 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
   mounting (`mountentry`, `mounttemporary`, `unmount`; Mount At…; test mount after Apply
   with Undo; Remount), SPEC §6.1; mount-point suggestions (where it's mounted now first) with
   Browse, and "Also show it at…" bind entries with the bind-source rule, SPEC §8.
-  Next: a hands-on pass in the VM's Plasma session, then network shares (SPEC §11).
+  Hands-on pass in the VM's Plasma session with real drives: done (2026-11-26).
+  Network shares step 1 (SPEC §11): Connect to Server (SMB via libsmbclient, NFS exports and
+  versions via showmount/rpcinfo), add to fstab or Mount At, saved logins
+  (`writecredentials`), moving typed passwords out of fstab (and out of backups),
+  client-tool install through PackageKit, NFS version choice, mount error explanations.
+  Next: "mount on login" for users (KWallet + login agent), then discovery.
   Later: mounting removable drives as the user through UDisks (like Dolphin).
 - Bind entries must carry `x-systemd.requires=<drive>`: `requires-mounts-for` alone binds the
   drive's EMPTY folder from the system disk when the drive has no fstab line (VM, 2026-11-26).
+- **Network shares**: `ANCHORAGE_NAS_ENV=~/.ancorage.env tests/vm/shares.sh` (~15 min): Samba
+  (login + guest share, `restrict anonymous = 2`) and NFS in the VM, then the developer's NAS
+  (TrueNAS, address in the private file: SMB `test_share`, NFS `/mnt/NAS_Pool/TVshows`, both writable
+  for tests). Covers listing, saved logins (`0600 root`, never logged), fstab + mount, NFS
+  version negotiation, Mount At, the owner rule for `credentials=`, password redaction in
+  backups, and installing a removed cifs-utils through PackageKit (needs an administrator).
+  The NAS login lives only in `~/.ancorage.env` (mode 600; read only the `NAS_` lines, never
+  print). `sharestest` runs live against the NAS with `ANCHORAGE_NAS_ENV` set.
+  - TrueNAS requires NFS clients on a privileged port unless "Allow non-root mount" is on
+    (switched on for testing); the VM's user-mode network can't use privileged ports.
+    Host-side NFS checks: a throwaway `--privileged --network host` container.
+  - `safefs::makeDirectories` gives missing parents the mode it is given: create
+    `/etc/anchorage` (0755) before `credentials/` (0700), or backups become unreadable.
+- `tests/vm/vm.sh deps` installs build dependencies added after the base image was made
+  (pkg-config, libsmbclient-dev); every runner calls it, so the base image stays untouched.
 - **Real drives**: `tests/vm/realdrives.sh attach|detach|status` attaches the developer's
   Lingames (btrfs) and Windows (NTFS) disks to the VM by serial number (refuses while mounted
   on the host; needs a temporary `setfacl` by the user). `tests/vm/realdrives_test.sh` (~15 min)
@@ -54,8 +74,9 @@ libkf6solid-dev libkf6i18n-dev libkf6coreaddons-dev libkf6xmlgui-dev
 libkf6configwidgets-dev libkf6widgetsaddons-dev libkf6wallet-dev libkf6dnssd-dev
 libpolkit-qt6-1-dev libsmbclient-dev libmount-dev libblkid-dev`.
 Dev/test tools: `clang` (libFuzzer), `clang-tidy`, `cppcheck`.
-Runtime: `nfs-common` (installed), `cifs-utils` (**not installed** on the dev machine;
-the app should detect it and offer to install it).
+Runtime: `nfs-common` and `cifs-utils` (both installed on the dev machine since
+2026-11-26; test the "missing" path in the VM or Docker). The app detects missing client tools
+and offers to install them (SPEC §11).
 
 ## Security rules (non-negotiable)
 
@@ -100,7 +121,7 @@ These come from the user's requirements and apply to every change:
   when a tab file has an unparseable line. Never rely on its exit code: our parser checks
   first, and only findmnt's messages are used (see `tests/fstabtest.cpp`).
 - Fuzzing: `cmake --preset fuzz && cmake --build --preset fuzz`, then
-  `build/fuzz/bin/fstab_fuzzer -max_total_time=300 -max_len=8192 build/fuzz/corpus tests/data` and
+  `build/fuzz/bin/fstab_fuzzer -max_total_time=300 -max_len=8192 build/fuzz/corpus tests/data fuzz/seeds/fstab` and
   `build/fuzz/bin/policy_fuzzer -max_total_time=300 -max_len=4096 build/fuzz/corpus-policy fuzz/seeds/policy` and
   `build/fuzz/bin/options_fuzzer -max_total_time=300 -max_len=2048 build/fuzz/corpus-options fuzz/seeds/options`.
   CI runs each for 1 minute on every push. Keep any crash input that turned out to be a

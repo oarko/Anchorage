@@ -89,6 +89,30 @@ MountOutcome unmount(const Paths &paths, const Caller &caller, const QString &mo
 // mounted at `path` (sorted, no duplicates). Reads `procRoot` (/proc).
 QStringList processesUsing(const QString &path, const QString &procRoot);
 
+// ---- Saved logins for SMB mounts (SPEC §11) --------------------------------------------
+
+struct SavedLogin {
+    QString server;
+    QString user;
+    QString password; // never logged or returned
+    QString domain;
+};
+
+// Empty if the login can be written: server and user names without '/', control
+// characters or spaces at the ends; password and domain without line breaks or NUL.
+QStringList checkLogin(const SavedLogin &login);
+
+// <owner>-<server>-<user>, with anything but letters, digits, '.', '_' and '-' replaced.
+QString credentialsName(const QString &owner, const QString &server, const QString &user);
+
+struct CredentialsOutcome {
+    QStringList errors;
+    QString path; // /etc/anchorage/credentials/<name>, for credentials=
+    bool ok() const { return errors.isEmpty(); }
+};
+// driveadmins, administrators and netmount members; always the caller's own file.
+CredentialsOutcome writeCredentials(const Paths &paths, const Caller &caller, const SavedLogin &login);
+
 // Backups: names look like fstab-2026-11-24T23-10-05Z (optionally with -N).
 bool isBackupName(const QString &name);
 Result<QStringList> listBackups(const Paths &paths); // newest first

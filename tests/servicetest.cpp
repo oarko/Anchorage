@@ -10,6 +10,8 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <algorithm>
+
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -90,7 +92,7 @@ private Q_SLOTS:
         m_paths.fstabName = QStringLiteral("fstab");
         m_paths.configDir = root + QStringLiteral("/etc/anchorage");
         m_paths.backupDir = root + QStringLiteral("/etc/anchorage/backups");
-        m_paths.credentialsDir = QStringLiteral("/etc/anchorage/credentials");
+        m_paths.credentialsDir = root + QStringLiteral("/etc/anchorage/credentials");
         m_paths.mountRoot = root + QStringLiteral("/fsroot");
         QVERIFY(QDir().mkpath(m_paths.configDir));
         QFile config(m_paths.configDir + QStringLiteral("/config"));
@@ -281,6 +283,73 @@ private Q_SLOTS:
         QCOMPARE(parse(settings::serialize(s)), s);
     }
 
+    void savedLogins()
+    {
+        const SavedLogin login{QStringLiteral("nas.local"), QStringLiteral("anna"), QStringLiteral("s3cret pass"), QStringLiteral("WORKGROUP")};
+        QVERIFY(!writeCredentials(m_paths, standard, login).ok());
+        const CredentialsOutcome o = writeCredentials(m_paths, netmount, login);
+        QVERIFY2(o.ok(), qPrintable(o.errors.join(QLatin1Char(' '))));
+        QCOMPARE(o.path, m_paths.credentialsDir + QStringLiteral("/") + netmount.name + QStringLiteral("-nas.local-anna"));
+        QCOMPARE(readPlain(o.path), QByteArray("username=anna\npassword=s3cret pass\ndomain=WORKGROUP\n"));
+        QCOMPARE(QFileInfo(o.path).permissions() & (QFileDevice::ReadGroup | QFileDevice::ReadOther), QFileDevice::Permissions());
+        QVERIFY(writeCredentials(m_paths, driveadmin, login).ok());
+        // Line breaks would add lines (e.g. a second "username=") to the file.
+        for (const SavedLogin &bad : {SavedLogin{QStringLiteral("nas"), QStringLiteral("anna"), QStringLiteral("x\nusername=root"), {}},
+                                      SavedLogin{QStringLiteral("nas"), QStringLiteral("an\nna"), QStringLiteral("x"), {}},
+                                      SavedLogin{QStringLiteral("../etc"), QStringLiteral("anna"), QStringLiteral("x"), {}},
+                                      SavedLogin{QStringLiteral("nas"), QStringLiteral("a/b"), QStringLiteral("x"), {}},
+                                      SavedLogin{QStringLiteral("nas"), QString(), QStringLiteral("x"), {}},
+                                      SavedLogin{QStringLiteral("-oX"), QStringLiteral("anna"), QStringLiteral("x"), {}}}) {
+            QVERIFY(!writeCredentials(m_paths, driveadmin, bad).ok());
+        }
+        QCOMPARE(credentialsName(QStringLiteral("anna"), QStringLiteral("[fe80::1]"), QStringLiteral("DOMAIN\\me")), QStringLiteral("anna-_fe80__1_-DOMAIN_me"));
+    }
+
+    void savingALoginFirstKeepsTheConfigFolderReadable()
+    {
+        QVERIFY(QDir(m_paths.configDir).removeRecursively());
+        QVERIFY(writeCredentials(m_paths, driveadmin, {QStringLiteral("nas"), QStringLiteral("anna"), QStringLiteral("pw"), {}}).ok());
+        const auto perms = QFileInfo(m_paths.configDir).permissions();
+        QVERIFY(perms & QFileDevice::ReadOther);
+        QVERIFY(perms & QFileDevice::ExeOther);
+        QVERIFY(!(QFileInfo(m_paths.credentialsDir).permissions() & QFileDevice::ReadOther));
+    }
+
+    void savedLoginsAreOnlyForTheirOwner()
+    {
+        const QByteArray other = initial + "//nas/x  /mnt/x  cifs  credentials=/etc/anchorage/credentials/bob-nas-bob,nofail  0 0\n";
+        const QByteArray own = initial + "//nas/x  /mnt/x  cifs  credentials=/etc/anchorage/credentials/" + standard.name.toUtf8() + "-nas-me,nofail  0 0\n";
+        const QByteArray escape = initial + "//nas/x  /mnt/x  cifs  credentials=/etc/anchorage/credentials/" + standard.name.toUtf8() + "-/../bob-nas,nofail  0 0\n";
+        QVERIFY(!write(standard, other, false, false).ok());
+        QVERIFY(!write(standard, escape, false, false).ok());
+        QVERIFY(write(standard, own, false, false).ok());
+        QVERIFY(write(driveadmin, other, false, false).ok()); // driveadmins may use any saved login
+    }
+
+    void passwordsLeaveTheBackupsToo()
+    {
+        const QByteArray withPassword = initial + "//nas/x  /mnt/x  cifs  username=anna,password=s3cret,nofail  0 0\n";
+        QVERIFY(write(driveadmin, withPassword, false, false).ok());
+        QVERIFY(write(driveadmin, withPassword + "tmpfs  /mnt/t  tmpfs  nofail  0 0\n", false, false).ok()); // a backup now has it
+        const auto before = listBackups(m_paths);
+        QVERIFY(std::any_of(before->cbegin(), before->cend(), [this](const QString &n) {
+            return readPlain(m_paths.backupDir + QLatin1Char('/') + n).contains("s3cret");
+        }));
+        // The move: the password leaves fstab, so it leaves every backup, the newest included.
+        QByteArray moved = current();
+        moved.replace("username=anna,password=s3cret", "credentials=/etc/anchorage/credentials/root-nas-anna");
+        const Outcome o = write(driveadmin, moved, false, false);
+        QVERIFY2(o.ok(), qPrintable(o.errors.join(QLatin1Char(' '))));
+        const auto after = listBackups(m_paths); // keep the result alive while looping over it
+        QVERIFY(after.ok());
+        for (const QString &n : *after) {
+            const QByteArray b = readPlain(m_paths.backupDir + QLatin1Char('/') + n);
+            QVERIFY2(!b.contains("s3cret"), qPrintable(n));
+        }
+        QVERIFY(readPlain(m_paths.backupDir + QLatin1Char('/') + o.backupName).contains("password=removed-by-anchorage"));
+        QVERIFY(!current().contains("s3cret"));
+    }
+
     void restoreBackup()
     {
         const Outcome first = write(standard, initial + "LABEL=a  /mnt/a  ext4  nofail  0 0\n", false, false);
@@ -364,6 +433,12 @@ private Q_SLOTS:
         badSettings.insert(QStringLiteral("path"), QStringLiteral("/etc/shadow"));
         QVERIFY(!requests::decodeSettings(badSettings).ok());
 
+        const requests::Credentials c{QStringLiteral("nas"), QStringLiteral("anna"), QStringLiteral("pw"), QString()};
+        QCOMPARE(requests::decodeCredentials(requests::encodeCredentials(c))->password, QStringLiteral("pw"));
+        QVariantMap badCred = requests::encodeCredentials(c);
+        badCred[QStringLiteral("password")] = QByteArray("pw");
+        QVERIFY(!requests::decodeCredentials(badCred).ok());
+
         QVariantMap badEntry = requests::encodeEntry(e);
         badEntry[QStringLiteral("pass")] = QStringLiteral("0");
         QVERIFY(!requests::decodeEntry(badEntry).ok());
@@ -398,6 +473,19 @@ private Q_SLOTS:
         QCOMPARE(c.uid, uid_t(0));
         QCOMPARE(c.gid, gid_t(0));
         QCOMPARE(c.mode, mode_t(0644));
+
+        // Saved logins: root only, in a folder only root can enter, and saving one first
+        // doesn't make the config folder (backups, settings) root-only.
+        QDir(m_paths.configDir).removeRecursively();
+        const CredentialsOutcome cred = writeCredentials(m_paths, driveadmin, {QStringLiteral("nas"), QStringLiteral("anna"), QStringLiteral("pw"), {}});
+        QVERIFY2(cred.ok(), qPrintable(cred.errors.join(QLatin1Char(' '))));
+        const FileInfo cf = statOf(cred.path);
+        QCOMPARE(cf.uid, uid_t(0));
+        QCOMPARE(cf.mode, mode_t(0600));
+        const FileInfo cd = statOf(m_paths.credentialsDir);
+        QCOMPARE(cd.uid, uid_t(0));
+        QCOMPARE(cd.mode, mode_t(0700));
+        QCOMPARE(statOf(m_paths.configDir).mode, mode_t(0755));
     }
 
     void rootGivesHomeMountPointsToTheHomeOwner()

@@ -134,6 +134,26 @@ public Q_SLOTS:
         return mountReply(service::unmount(service::systemPaths(), *caller, request->mountPoint, request->confirmSystem, service::systemRunner()));
     }
 
+    ActionReply writecredentials(const QVariantMap &args)
+    {
+        const auto request = requests::decodeCredentials(args);
+        if (!request) {
+            return error(request.error());
+        }
+        const auto caller = who();
+        if (!caller) {
+            return error(caller.error());
+        }
+        const service::CredentialsOutcome out =
+            service::writeCredentials(service::systemPaths(), *caller, {request->server, request->user, request->password, request->domain});
+        if (!out.ok()) {
+            return error(out.errors.join(QLatin1Char('\n')));
+        }
+        ActionReply r = ActionReply::SuccessReply();
+        r.addData(QStringLiteral("path"), out.path);
+        return r;
+    }
+
 private:
     static ActionReply mountReply(const service::MountOutcome &outcome)
     {

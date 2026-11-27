@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mountpolicy.h"
 
+#include "paths.h"
+
 #include <QRegularExpression>
 #include <QSet>
 
@@ -270,6 +272,23 @@ Plan planFstabWrite(QByteArrayView current, QByteArrayView proposed, const Calle
         if (isSystemEntry(e, rootSpecs) && !caller.fullAccess()) {
             plan.errors.append(QStringLiteral("Only driveadmins or administrators can add or change the system entry for %1.").arg(e.mountPoint));
             continue;
+        }
+        // A saved login may only be used by its owner: otherwise anyone could make the
+        // computer send another person's password to a server of their choice (SPEC §11).
+        if (!caller.fullAccess()) {
+            const QString own = QString::fromUtf8(paths::credentialsDir.data(), qsizetype(paths::credentialsDir.size())) + QLatin1Char('/') + caller.name
+                + QLatin1Char('-');
+            bool refused = false;
+            for (const QString &o : e.options) {
+                if (optionName(o) == QLatin1String("credentials") || optionName(o) == QLatin1String("cred")) {
+                    const QString path = optionValue(o);
+                    refused = refused || !path.startsWith(own) || path.contains(QLatin1String("/..")) || path.mid(own.size()).contains(QLatin1Char('/'));
+                }
+            }
+            if (refused) {
+                plan.errors.append(QStringLiteral("%1: credentials= must be one of your own saved logins.").arg(e.mountPoint));
+                continue;
+            }
         }
         // Bind entries: what they show must come from a usual place, or from inside another
         // entry's drive; anything else (system folders) is for driveadmins/sudo (SPEC §6).

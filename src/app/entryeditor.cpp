@@ -30,6 +30,7 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QStandardItemModel>
 #include <QStyledItemDelegate>
 #include <QTabWidget>
 #include <QTreeWidget>
@@ -237,6 +238,29 @@ EntryEditor::EntryEditor(const fstab::Entry &initial, bool isNew, const EditorCo
         m_entry.pass = 0;
     }
     m_binds = m_ctx.binds;
+    // Login section: what the entry (or Connect to Server) says.
+    {
+        const QStringList &o = m_entry.options;
+        const bool hasCred = std::any_of(o.cbegin(), o.cend(), [](const QString &x) {
+            return x.startsWith(QLatin1String("credentials=")) || x.startsWith(QLatin1String("cred="));
+        });
+        int mode = 1;
+        if (m_ctx.guest || o.contains(QStringLiteral("guest"))) {
+            mode = 0;
+        } else if (hasCred && !m_ctx.login) {
+            mode = 2;
+        }
+        m_loginMode->setCurrentIndex(m_loginMode->findData(mode));
+        if (m_ctx.login) {
+            m_loginUser->setText(m_ctx.login->user);
+            m_loginPassword->setText(m_ctx.login->password);
+            m_loginDomain->setText(m_ctx.login->domain);
+        }
+        const bool smb = m_entry.type == QLatin1String("cifs") || m_entry.type == QLatin1String("smb3");
+        if (smb && mode != 2) {
+            applyLogin(); // write guest / credentials= into the options
+        }
+    }
     rebuildAdvancedTable();
     refresh();
     resize(820, 760);
@@ -249,6 +273,7 @@ QWidget *EntryEditor::buildBasicTab()
     auto *page = new QWidget(this);
     auto *outer = new QVBoxLayout(page);
     auto *form = new QFormLayout;
+    m_basicForm = form;
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     outer->addLayout(form);
     outer->addStretch(1);
@@ -350,6 +375,8 @@ QWidget *EntryEditor::buildBasicTab()
         }
     });
 
+    outer->insertWidget(1, buildShareSection(page));
+
     // "Also show it at…": bind entries saved together with this one.
     auto *bindBox = new QGroupBox(i18n("Also show it at…"), page);
     m_bindBox = bindBox;
@@ -376,7 +403,7 @@ QWidget *EntryEditor::buildBasicTab()
     bindButtons->addWidget(removeBindButton);
     bindButtons->addStretch(1);
     bv->addLayout(bindButtons);
-    outer->insertWidget(1, bindBox);
+    outer->insertWidget(2, bindBox);
     connect(m_keepOld, &QCheckBox::toggled, this, [this] {
         refresh();
     });
@@ -479,6 +506,128 @@ void EntryEditor::updateSuggestions()
         m_mountPointBox->addItems(items);
         m_mountPoint->setText(m_entry.mountPoint);
     }
+}
+
+QWidget *EntryEditor::buildShareSection(QWidget *page)
+{
+    auto *holder = new QWidget(page);
+    auto *v = new QVBoxLayout(holder);
+    v->setContentsMargins(0, 0, 0, 0);
+
+    // SMB login (SPEC §11): never written into fstab itself.
+    auto *loginBox = new QGroupBox(i18n("Login"), holder);
+    m_loginBox = loginBox;
+    auto *lf = new QFormLayout(loginBox);
+    m_loginMode = new QComboBox(loginBox);
+    m_loginMode->setObjectName(QStringLiteral("editor.loginMode"));
+    m_loginMode->addItem(i18n("As a guest (no password)"), 0);
+    m_loginMode->addItem(i18n("With a user name and password"), 1);
+    m_loginMode->addItem(i18n("Keep the saved login"), 2);
+    m_loginUser = new QLineEdit(loginBox);
+    m_loginUser->setObjectName(QStringLiteral("editor.loginUser"));
+    m_loginPassword = new QLineEdit(loginBox);
+    m_loginPassword->setObjectName(QStringLiteral("editor.loginPassword"));
+    m_loginPassword->setEchoMode(QLineEdit::Password);
+    m_loginDomain = new QLineEdit(loginBox);
+    m_loginDomain->setObjectName(QStringLiteral("editor.loginDomain"));
+    m_loginDomain->setPlaceholderText(i18n("usually empty"));
+    lf->addRow(i18n("Log in:"), m_loginMode);
+    lf->addRow(i18n("User name:"), m_loginUser);
+    lf->addRow(i18n("Password:"), m_loginPassword);
+    lf->addRow(i18n("Domain or workgroup:"), m_loginDomain);
+    lf->addRow(note(i18n("The password is kept in a file only root can read (credentials=), never in /etc/fstab, which every user can read."),
+                    loginBox));
+    v->addWidget(loginBox);
+    connect(m_loginMode, &QComboBox::activated, this, [this] {
+        applyLogin();
+    });
+    for (auto *e : {m_loginUser, m_loginPassword, m_loginDomain}) {
+        connect(e, &QLineEdit::textEdited, this, [this] {
+            applyLogin();
+        });
+    }
+
+    // NFS version (SPEC §11).
+    auto *nfsBox = new QGroupBox(i18n("NFS version"), holder);
+    m_nfsBox = nfsBox;
+    auto *nf = new QFormLayout(nfsBox);
+    m_nfsVersion = new QComboBox(nfsBox);
+    m_nfsVersion->setObjectName(QStringLiteral("editor.nfsVersion"));
+    m_nfsVersion->addItem(i18n("Automatic (the newest both sides support)"), QStringLiteral("auto"));
+    for (const char *ver : {"4.2", "4.1", "4", "3"}) {
+        m_nfsVersion->addItem(QStringLiteral("NFS %1").arg(QLatin1String(ver)), QLatin1String(ver));
+    }
+    m_nfsOffered = note(QString(), nfsBox);
+    m_nfsOffered->setObjectName(QStringLiteral("editor.nfsOffered"));
+    nf->addRow(i18n("Version:"), m_nfsVersion);
+    nf->addRow(m_nfsOffered);
+    v->addWidget(nfsBox);
+    connect(m_nfsVersion, &QComboBox::activated, this, [this] {
+        const QString ver = m_nfsVersion->currentData().toString();
+        QStringList opts;
+        for (const QString &o : std::as_const(m_entry.options)) {
+            const QString n = o.section(QLatin1Char('='), 0, 0);
+            if (n != QLatin1String("vers") && n != QLatin1String("nfsvers")) {
+                opts.append(o);
+            }
+        }
+        if (ver != QLatin1String("auto")) {
+            opts.append(QStringLiteral("vers=") + ver);
+        }
+        m_entry.type = QStringLiteral("nfs"); // the version is chosen by vers= (or negotiated)
+        m_entry.options = opts;
+        rebuildAdvancedTable();
+        refresh();
+    });
+    return holder;
+}
+
+QString EntryEditor::shareServer() const
+{
+    return m_entry.spec.startsWith(QLatin1String("//")) ? m_entry.spec.mid(2).section(QLatin1Char('/'), 0, 0) : QString();
+}
+
+QString EntryEditor::credentialsPathFor(const QString &user) const
+{
+    return m_ctx.credentialsDir + QLatin1Char('/') + service::credentialsName(m_ctx.me.name, shareServer(), user);
+}
+
+void EntryEditor::applyLogin()
+{
+    if (m_refreshing) {
+        return;
+    }
+    const int mode = m_loginMode->currentData().toInt();
+    if (mode == 2) {
+        refresh();
+        return;
+    }
+    static const QStringList login = {QStringLiteral("username"), QStringLiteral("user="), QStringLiteral("password"), QStringLiteral("pass"),
+                                      QStringLiteral("domain"), QStringLiteral("dom"), QStringLiteral("workgroup"), QStringLiteral("credentials"),
+                                      QStringLiteral("cred"), QStringLiteral("guest")};
+    QStringList opts;
+    int at = -1;
+    for (const QString &o : std::as_const(m_entry.options)) {
+        const QString n = o.section(QLatin1Char('='), 0, 0);
+        const bool isLogin = (n == QLatin1String("user") ? o.contains(QLatin1Char('=')) : login.contains(n));
+        if (isLogin) {
+            at = at < 0 ? int(opts.size()) : at;
+            continue;
+        }
+        opts.append(o);
+    }
+    const QString add = mode == 0 ? QStringLiteral("guest") : QStringLiteral("credentials=") + credentialsPathFor(m_loginUser->text().trimmed());
+    opts.insert(at < 0 ? opts.size() : at, add);
+    m_entry.options = opts;
+    refresh();
+}
+
+std::optional<service::SavedLogin> EntryEditor::pendingLogin() const
+{
+    if (m_loginBox->isHidden() || m_loginMode->currentData().toInt() != 1 || m_loginPassword->text().isEmpty()) {
+        return std::nullopt;
+    }
+    return service::SavedLogin{shareServer(), m_loginUser->text().trimmed(), m_loginPassword->text(), m_loginDomain->text().trimmed()};
 }
 
 QList<binds::Bind> EntryEditor::binds() const
@@ -970,11 +1119,49 @@ void EntryEditor::refresh()
     m_mountPointBox->setEnabled(!swap);
     updateSuggestions();
     refreshBinds();
+    {
+        const bool smb = m_entry.type == QLatin1String("cifs") || m_entry.type == QLatin1String("smb3");
+        const bool nfs = m_entry.type == QLatin1String("nfs") || m_entry.type == QLatin1String("nfs4");
+        m_loginBox->setHidden(!smb);
+        const int mode = m_loginMode->currentData().toInt();
+        m_loginUser->setEnabled(mode == 1);
+        m_loginPassword->setEnabled(mode == 1);
+        m_loginDomain->setEnabled(mode == 1);
+        // "Keep the saved login" only makes sense when the entry has one.
+        if (auto *model = qobject_cast<QStandardItemModel *>(m_loginMode->model())) {
+            model->item(2)->setEnabled(std::any_of(m_initial.options.cbegin(), m_initial.options.cend(), [](const QString &x) {
+                return x.startsWith(QLatin1String("credentials="));
+            }));
+        }
+        m_nfsBox->setHidden(!nfs);
+        QString ver = QStringLiteral("auto");
+        for (const QString &o : std::as_const(m_entry.options)) {
+            if (o.startsWith(QLatin1String("vers=")) || o.startsWith(QLatin1String("nfsvers="))) {
+                ver = o.section(QLatin1Char('='), 1);
+            }
+        }
+        if (ver == QLatin1String("auto") && m_entry.type == QLatin1String("nfs4")) {
+            ver = QStringLiteral("4");
+        }
+        const int vi = m_nfsVersion->findData(ver);
+        m_nfsVersion->setCurrentIndex(vi < 0 ? 0 : vi);
+        if (m_ctx.nfsVersions.isEmpty()) {
+            m_nfsOffered->setText(i18n("The server didn't say which versions it offers; the test mount after Apply will show if it works."));
+        } else {
+            QStringList v;
+            for (int n : m_ctx.nfsVersions) {
+                v.append(QString::number(n));
+            }
+            m_nfsOffered->setText(i18n("This server offers NFS %1.", v.join(i18nc("list separator for NFS versions", " and "))));
+        }
+    }
     if (m_type->currentText() != m_entry.type) {
         m_type->setCurrentText(m_entry.type);
     }
     const auto *vol = matchingVolume();
     m_identify->setEnabled(vol != nullptr && !network);
+    m_identify->setHidden(network); // shares are named //server/share or server:/path
+    m_basicForm->setRowVisible(m_drive, !network);
     if (!vol) {
         m_drive->setCurrentIndex(0);
     }
@@ -1196,6 +1383,25 @@ QList<Issue> EntryEditor::issues() const
         // Found by tests/mounttest.cpp on kernel 7.0.
         warn(QStringLiteral("options"), i18n("The ntfs3 driver ignores these permissions for the drive's top folder: every user can create files there. "
                                              "Choose \"ntfs\" (ntfs-3g) as the file system if that matters."));
+    }
+    if (!m_loginBox->isHidden() && m_loginMode->currentData().toInt() == 1) {
+        const QString user = m_loginUser->text().trimmed();
+        if (user.isEmpty()) {
+            error(QStringLiteral("login"), i18n("Type the user name for this share, or log in as a guest."));
+        } else if (m_loginPassword->text().isEmpty() && !m_initial.options.contains(QStringLiteral("credentials=") + credentialsPathFor(user))) {
+            error(QStringLiteral("login"), i18n("Type the password for %1.", user));
+        }
+        if (!m_loginPassword->text().isEmpty()) {
+            for (const QString &e : service::checkLogin({shareServer(), user, m_loginPassword->text(), m_loginDomain->text().trimmed()})) {
+                error(QStringLiteral("login"), e);
+            }
+        }
+    }
+    if (!m_nfsBox->isHidden() && !m_ctx.nfsVersions.isEmpty()) {
+        const QString ver = m_nfsVersion->currentData().toString();
+        if (ver != QLatin1String("auto") && !m_ctx.nfsVersions.contains(ver.section(QLatin1Char('.'), 0, 0).toInt())) {
+            warn(QStringLiteral("options"), i18n("This server doesn't offer NFS %1, so mounting will fail. Choose Automatic or a version it offers.", ver));
+        }
     }
     QStringList targets;
     for (const auto &b : binds()) {
