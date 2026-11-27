@@ -27,7 +27,7 @@ Last updated: 2026-11-25
 | Privileges | KAuth helper (polkit); GUI always runs as the user |
 | GUI toolkit | **QtWidgets/KXmlGui** with KCategorizedView tiles, layout **C (Dolphin-like)**, see §15 |
 | Packaging | `.deb` for Kubuntu; `cmake --install` for development |
-| Name | **Anchorage**: binaries `anchorage`, `anchorage-helper`; config in `/etc/anchorage/`. app ID `io.github.oarko.anchorage`; repo https://github.com/oarko/Anchorage (private) |
+| Name | **Final (2026-11-27)** — **Anchorage**: binaries `anchorage`, `anchorage-helper`; config in `/etc/anchorage/`. app ID `io.github.oarko.anchorage`; repo https://github.com/oarko/Anchorage (private) |
 
 ## 3. Mounting concepts (background)
 
@@ -409,6 +409,47 @@ Agreed 2026-11-26:
   Drive actions are offered instead via a **Plasma Disks & Devices (Solid) action**.
 - **Login autostart**: a small user agent that mounts the user's network login mounts
   via the helper (`mount.usershare`), using KWallet credentials.
+
+## 12a. Packaging and beta builds (agreed 2026-11-27)
+
+- **Package**: a proper `debian/` folder (debhelper + CMake), checked with lintian, built in
+  a clean `ubuntu:26.04` container; suitable for a PPA later. First version `0.9.0~beta1`
+  (`~` sorts before the final `0.9.0`, so the release is an upgrade).
+- **Groups**: the package creates the system groups `driveadmins` and `netmount` and adds
+  nobody. Whoever installs it has sudo, so is already an administrator; driveadmins is
+  effectively root and is only ever granted by hand.
+- **Beta flag**: CMake option `ANCHORAGE_BETA`. A version containing `~beta` or `~rc` turns it
+  on automatically (with a notice), so a beta can't ship without it. A beta build:
+  - shows a warning at every launch ("beta; it changes system files; use a virtual machine
+    or a computer you don't depend on, never production systems") with "Don't show again
+    for this version";
+  - logs more detail by default (Qt logging categories, e.g. "INFO: Starting network scan",
+    "INFO: Found share at …"); release builds keep these off unless switched on with
+    `QT_LOGGING_RULES` for a bug report. **Passwords are never logged** in either build.
+- **Uninstalling**:
+  - Release: remove keeps `/etc/anchorage`. Purge deletes saved logins that no line in
+    `/etc/fstab` uses any more, keeps the ones still used (an SMB line's `credentials=`
+    needs its file, or the share stops mounting), and keeps backups and settings; it lists
+    what was kept and why.
+  - Beta: remove asks (debconf) whether to delete all of `/etc/anchorage` (saved logins,
+    backups, settings). Default Yes, but **No** when shares in `/etc/fstab` still use saved
+    logins, and the question then says how many would stop mounting.
+  - Never touched on uninstall: `/etc/fstab` itself. Entries Anchorage wrote are plain
+    fstab, so drives, binds and NFS shares keep working without it; mounted shares stay
+    mounted.
+- **Dependencies**: KDE/Qt libraries and libsmbclient (from the build). `cifs-utils` and
+  `nfs-common`: the release *Recommends* them (installed by default, like from a repo); a
+  beta only *Suggests* them, so testers see Anchorage's own Install offer.
+- **Build and test**: `packaging/build-deb.sh` builds the source and binary packages in a
+  clean `ubuntu:26.04` container and runs lintian (pedantic); `tests/vm/package.sh` installs
+  the `.deb` in the test VM and checks the package, runs the authorisation scenarios against
+  the packaged helper, an upgrade, and the beta and release uninstall rules. The groups are
+  made with systemd-sysusers (`debian/anchorage.sysusers`). The changelog's distribution is
+  the Ubuntu series (`resolute` for 26.04).
+- **Icon**: a fouled anchor in KDE Breeze style (flat, simple shapes, readable at 16 px),
+  SVG, drawn first by Claude for review; if it isn't right, the user tries Recraft. A
+  ship's-side view with the anchor in its hawsepipe may serve as larger artwork (README /
+  GitHub banner). Don't copy official US Navy insignia.
 
 ## 13. Repository
 

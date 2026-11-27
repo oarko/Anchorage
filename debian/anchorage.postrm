@@ -1,0 +1,45 @@
+#!/bin/sh
+# Purging deletes only the saved logins that no line in /etc/fstab uses any more. Logins
+# still in use are kept (an SMB line's credentials= needs its file, or the share stops
+# mounting), and so are the backups of /etc/fstab and the settings (SPEC §12a).
+set -e
+
+CONFIG=/etc/anchorage
+CREDS=$CONFIG/credentials
+
+# Saved-login files that a line in /etc/fstab still names with credentials= (or cred=).
+logins_in_use() {
+    [ -d "$CREDS" ] && [ -r /etc/fstab ] || return 0
+    awk '$1 !~ /^#/ && NF >= 4 {
+            n = split($4, o, ",")
+            for (i = 1; i <= n; i++) if (o[i] ~ /^cred(entials)?=/) { sub(/^[^=]*=/, "", o[i]); print o[i] }
+        }' /etc/fstab |
+        while read -r f; do
+            case "$f" in "$CREDS"/*) [ -f "$f" ] && echo "$f" ;; esac
+        done | sort -u
+}
+
+if [ "$1" = purge ] && [ -d "$CONFIG" ]; then
+    if [ -d "$CREDS" ]; then
+        used=$(logins_in_use)
+        deleted=0
+        for f in "$CREDS"/*; do
+            [ -f "$f" ] || continue
+            if ! printf '%s\n' "$used" | grep -qxF -- "$f"; then
+                rm -f -- "$f"
+                deleted=$((deleted + 1))
+            fi
+        done
+        rmdir "$CREDS" 2>/dev/null || true
+        echo "anchorage: deleted $deleted saved login(s) that /etc/fstab no longer uses."
+        if [ -n "$used" ]; then
+            echo "anchorage: kept these saved logins, because shares in /etc/fstab still use them:"
+            printf '  %s\n' $used
+        fi
+    fi
+    echo "anchorage: kept $CONFIG (backups of /etc/fstab and settings). Delete it by hand if you don't need them."
+fi
+
+#DEBHELPER#
+
+exit 0

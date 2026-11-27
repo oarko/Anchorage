@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "shares.h"
 
+#include "logging.h"
+
 #include <QProcess>
 #include <QRegularExpression>
 
@@ -75,6 +77,7 @@ Result<QList<Share>> listNfs(const QString &host)
     if (!validHost(host)) {
         return R::failure(QStringLiteral("Not a server name."));
     }
+    qCInfo(logging::network).noquote() << "Starting network scan of" << host << "(NFS)";
     QProcess p;
     p.setProcessChannelMode(QProcess::MergedChannels);
     p.start(QStringLiteral("/usr/sbin/showmount"), {QStringLiteral("-e"), QStringLiteral("--no-headers"), host});
@@ -89,10 +92,17 @@ Result<QList<Share>> listNfs(const QString &host)
     const QByteArray out = p.readAll();
     if (p.exitCode() != 0) {
         // NFSv4-only servers have no mount service to ask; the path can still be typed.
-        return R::failure(QString::fromUtf8(out).trimmed().isEmpty() ? QStringLiteral("%1 didn't list any NFS exports.").arg(host)
-                                                                     : QString::fromUtf8(out).trimmed());
+        const QString why = QString::fromUtf8(out).trimmed().isEmpty() ? QStringLiteral("%1 didn't list any NFS exports.").arg(host)
+                                                                      : QString::fromUtf8(out).trimmed();
+        qCInfo(logging::network).noquote() << "NFS scan of" << host << "failed:" << why;
+        return R::failure(why);
     }
-    return parseShowmount(out);
+    const QList<Share> shares = parseShowmount(out);
+    for (const Share &share : shares) {
+        qCInfo(logging::network).noquote() << "Found share at" << deviceFor(host, Protocol::Nfs, share) << "for" << share.comment;
+    }
+    qCInfo(logging::network).noquote() << "Found" << shares.size() << "NFS exports on" << host;
+    return shares;
 }
 
 namespace
@@ -135,6 +145,9 @@ SmbList listSmb(const QString &host, const Login &login)
         out.message = QStringLiteral("Could not start the SMB client.");
         return out;
     }
+    qCInfo(logging::network).noquote() << "Starting network scan of" << host << "(SMB),"
+                                       << (login.guest ? QStringLiteral("as guest")
+                                                       : login.user.isEmpty() ? QStringLiteral("without a login") : QStringLiteral("as %1").arg(login.user));
     Login copy = login;
     smbc_setDebug(ctx, 0);
     smbc_setTimeout(ctx, 10000);
@@ -172,6 +185,7 @@ SmbList listSmb(const QString &host, const Login &login)
             out.message = QStringLiteral("Listing the shares of %1 failed: %2").arg(host, QString::fromLocal8Bit(strerror(e)));
         }
         smbc_free_context(ctx, 1);
+        qCInfo(logging::network).noquote() << "SMB scan of" << host << "failed:" << out.message << QStringLiteral("(errno %1)").arg(e);
         return out;
     }
     while (const smbc_dirent *d = smbc_getFunctionReaddir(ctx)(ctx, dir)) {
@@ -182,10 +196,12 @@ SmbList listSmb(const QString &host, const Login &login)
             const qsizetype len = qsizetype(qstrnlen(name, d->namelen));
             const char *comment = d->comment;
             out.shares.append({QString::fromUtf8(name, len), comment ? QString::fromUtf8(comment, qsizetype(qstrnlen(comment, d->commentlen))) : QString()});
+            qCInfo(logging::network).noquote() << "Found share at" << deviceFor(host, Protocol::Smb, out.shares.last());
         }
     }
     smbc_getFunctionClosedir(ctx)(ctx, dir);
     smbc_free_context(ctx, 1);
+    qCInfo(logging::network).noquote() << "Found" << out.shares.size() << "SMB shares on" << host;
     return out;
 }
 
@@ -221,7 +237,9 @@ QList<int> nfsVersions(const QString &host)
         p.waitForFinished();
         return {};
     }
-    return parseRpcinfo(p.readAllStandardOutput());
+    const QList<int> versions = parseRpcinfo(p.readAllStandardOutput());
+    qCInfo(logging::network).noquote() << host << "offers NFS versions" << versions;
+    return versions;
 }
 
 QString deviceFor(const QString &host, Protocol protocol, const Share &share)

@@ -6,6 +6,8 @@ add_library(anchorage_core STATIC
     binds.cpp
     binds.h
     linediff.cpp
+    logging.cpp
+    logging.h
     linediff.h
     locations.cpp
     locations.h

@@ -1,0 +1,38 @@
+Anchorage for Debian and Ubuntu
+===============================
+
+Who may do what
+---------------
+The package creates two empty groups. Administrators (members of "sudo") can always use
+Anchorage with their own password. To let someone else use it:
+
+  sudo adduser alice netmount      # add network shares and save logins for them
+  sudo adduser alice driveadmins   # change everything (effectively root: be careful)
+
+They need to log out and in again before the new group counts.
+
+Beta versions
+-------------
+A version like 0.9.0~beta1 is a beta. It shows a warning at every start (which you can
+turn off for that version), and it logs what it does. To see the log:
+
+  anchorage                        # the app's lines appear in the terminal
+  journalctl -b | grep anchorage   # the root helper's lines
+
+Release versions log only problems; switch the details on for a bug report with
+  QT_LOGGING_RULES="anchorage.*.info=true" anchorage
+Passwords are never logged.
+
+Uninstalling
+------------
+/etc/fstab is never changed by removing Anchorage. Everything Anchorage added to it is
+plain fstab, so drives, binds and network shares keep working without Anchorage.
+SMB shares that use a saved login need their file in /etc/anchorage/credentials.
+
+  * Removing a beta asks whether to delete /etc/anchorage (saved logins, backups of
+    /etc/fstab and settings). The default is Yes, but No if shares still use saved logins.
+  * Removing a release keeps /etc/anchorage.
+  * Purging deletes only the saved logins that /etc/fstab no longer uses, and keeps the
+    backups and settings.
+
+The groups driveadmins and netmount are left in place.

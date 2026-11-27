@@ -46,6 +46,14 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
   on the host; needs a temporary `setfacl` by the user). `tests/vm/realdrives_test.sh` (~15 min)
   runs `realdrives_scenarios.py` against them (only an `anchorage-test` folder is written and
   removed), then resets the VM and installs Anchorage fresh for hands-on testing.
+- **Packaging (SPEC §12a)**: `debian/` (debhelper 13 + CMake/Ninja, native, series
+  `resolute`), built by `packaging/build-deb.sh` in a clean `ubuntu:26.04` container with
+  lintian (pedantic, clean). Version = `project(VERSION)` + `ANCHORAGE_VERSION_SUFFIX` and must
+  equal `debian/changelog` (CMake stops otherwise); `~beta`/`~rc` forces `ANCHORAGE_BETA`
+  (launch warning, INFO logging). Bump both together for each beta. `tests/vm/package.sh`
+  (~15 min) tests install, e2e scenarios against the packaged helper, upgrade and the
+  uninstall rules (repacking the .deb for the upgrade/release cases). Groups come from
+  `debian/anchorage.sysusers`; maintainer scripts get the beta flag from debian/rules.
 - SMB share *creation* is a planned phase 2 feature (SPEC §16); keep v1 scope to mounting.
 - Ask the user before starting implementation.
 
@@ -103,6 +111,9 @@ These come from the user's requirements and apply to every change:
    helper only at mount time, via a root-only `0600` temp credentials file deleted
    right after. They are never written to fstab or logs. Boot-mount credentials go in
    root-only `0600` files under `/etc/anchorage/credentials/`.
+   Logging goes through the `anchorage::logging` categories (`src/core/logging.h`). Never
+   log request maps, fstab content or credentials files; pass anything that might contain
+   a password through `logging::scrub()` (`tests/loggingtest.cpp` checks a live SMB scan).
 10. Hardened build flags are always on: `-D_FORTIFY_SOURCE=3 -fstack-protector-strong
     -fPIE -pie -Wl,-z,relro,-z,now -Wall -Wextra -Werror` (helper at minimum).
 
@@ -233,5 +244,5 @@ GPL-3.0-or-later (chosen 2026-11-22). Every source file starts with
 
 Keep the app name, reverse-DNS ID, polkit action prefix, binary names, and config paths
 defined in one CMake section (e.g. `set(APP_NAME ...)`, `set(APP_ID ...)`) and generate
-the other files from it, so the final rename is a one-line change. Rename before the first
-release, because polkit action IDs and config paths become a compatibility promise.
+the other files from it. The name is final (2026-11-27) and a beta has shipped: polkit action
+IDs, the helper ID and config paths are now a compatibility promise.

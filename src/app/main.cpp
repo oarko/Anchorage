@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "betawarning.h"
 #include "config-anchorage.h"
 #include "datasource.h"
 #include "mainwindow.h"
+#include "logging.h"
 #include "privilege.h"
 
 #include <KAboutData>
@@ -21,6 +23,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    anchorage::logging::setMessagePattern();
     QApplication app(argc, argv);
     Q_INIT_RESOURCE(anchorage); // the UI description lives in the static anchorage_ui library
     KLocalizedString::setApplicationDomain(ANCHORAGE_APP_BINARY);
@@ -33,12 +36,19 @@ int main(int argc, char *argv[])
                      i18n("© 2026 The Anchorage authors"));
     about.setDesktopFileName(QStringLiteral(ANCHORAGE_APP_ID));
     KAboutData::setApplicationData(about);
-    QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("drive-harddisk")));
+    QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral(ANCHORAGE_APP_ID)));
 
     QCommandLineParser parser;
     about.setupCommandLine(&parser);
     parser.process(app);
     about.processCommandLine(&parser);
+
+    if (anchorage::logging::betaBuild()) {
+        qCInfo(anchorage::logging::helper).noquote() << "Starting Anchorage" << ANCHORAGE_VERSION << "(beta build)";
+        if (!anchorage::beta::confirmLaunch(nullptr, QStringLiteral(ANCHORAGE_VERSION))) {
+            return 0;
+        }
+    }
 
     auto *window = new MainWindow(new SystemDataSource);
     window->show();

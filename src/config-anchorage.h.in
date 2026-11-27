@@ -4,7 +4,9 @@
 #define ANCHORAGE_APP_NAME   "@APP_NAME@"
 #define ANCHORAGE_APP_BINARY "@APP_BINARY@"
 #define ANCHORAGE_APP_ID     "@APP_ID@"
-#define ANCHORAGE_VERSION    "@PROJECT_VERSION@"
+#define ANCHORAGE_VERSION    "@ANCHORAGE_VERSION@" // the package version, e.g. 0.9.0~beta1
 #define ANCHORAGE_CONFIG_DIR "@APP_CONFIG_DIR@"
 #define ANCHORAGE_DRIVEADMIN_GROUP "@DRIVEADMIN_GROUP@"
 #define ANCHORAGE_NETMOUNT_GROUP "@NETMOUNT_GROUP@"
+// 1 in a beta build: launch warning and INFO logging (SPEC §12a).
+#cmakedefine01 ANCHORAGE_BETA

@@ -1,6 +1,8 @@
 # The GUI as a static library, so tests can build the main window with fixture data.
 add_library(anchorage_ui STATIC
     anchorage.qrc
+    betawarning.cpp
+    betawarning.h
     backupspage.cpp
     backupspage.h
     connectdialog.cpp
@@ -53,3 +55,5 @@ configure_file(app.desktop.in ${CMAKE_CURRENT_BINARY_DIR}/${APP_ID}.desktop)
 
 install(TARGETS ${APP_BINARY} ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${APP_ID}.desktop DESTINATION ${KDE_INSTALL_APPDIR})
+# The app icon (SPEC §12a): one scalable SVG, named after the app ID.
+install(FILES icons/anchorage.svg DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/scalable/apps RENAME ${APP_ID}.svg)

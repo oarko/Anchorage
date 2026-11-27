@@ -1,0 +1,5 @@
+# Anchorage's groups (SPEC §12a). Created empty: an administrator adds people by hand.
+#   driveadmins: may change /etc/fstab with their own password (effectively root).
+#   netmount:    may add network shares and save logins for them.
+g driveadmins -
+g netmount -

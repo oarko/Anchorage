@@ -1,0 +1,41 @@
+Source: anchorage
+Section: admin
+Maintainer: Arraybytes <anchorage@arraybytes.com>
+Build-Depends: debhelper-compat (= 13),
+               dh-sequence-installsysusers,
+               cmake,
+               ninja-build,
+               extra-cmake-modules,
+               pkgconf,
+               po-debconf,
+               qt6-base-dev,
+               libkf6coreaddons-dev,
+               libkf6i18n-dev,
+               libkf6xmlgui-dev,
+               libkf6widgetsaddons-dev,
+               libkf6auth-dev,
+               libkf6itemviews-dev,
+               libkf6colorscheme-dev,
+               libkf6solid-dev,
+               libsmbclient-dev
+Standards-Version: 4.7.2
+Homepage: https://github.com/oarko/Anchorage
+Vcs-Browser: https://github.com/oarko/Anchorage
+Vcs-Git: https://github.com/oarko/Anchorage.git
+
+Package: anchorage
+Architecture: linux-any
+Depends: ${shlibs:Depends}, ${misc:Depends}, polkitd, systemd
+Recommends: ${anchorage:Recommends}
+Suggests: ${anchorage:Suggests}
+Description: manage drives, network shares and /etc/fstab on KDE Plasma
+ Anchorage is a KDE Plasma application for the places a computer mounts:
+ internal and USB drives, folders shown in a second place (bind mounts),
+ and SMB and NFS network shares. It edits /etc/fstab for you, explains
+ each option in plain words, checks every change before saving it, and
+ keeps a backup of the file before each change.
+ .
+ Changes to system files are made by a small helper that runs as root
+ through polkit. Members of the "driveadmins" group can manage everything
+ with their own password; members of "netmount" can add network shares.
+ The package creates both groups but adds nobody to them.
