@@ -2,8 +2,18 @@
 # Attach two real drives of the developer's machine to the test VM, for testing Anchorage
 # against real hardware (agreed 2026-11-26; both drives hold nothing irreplaceable):
 #
-#   Lingames  Samsung 870 QVO 2TB (SATA), one btrfs partition
-#   Windows   Samsung 980 PRO 2TB (NVMe), a clean Windows install (EFI, C: NTFS, recovery)
+#   Lingames  a SATA SSD with one btrfs partition
+#   Windows   an NVMe SSD with a clean Windows install (EFI, C: NTFS, recovery)
+#
+# Which drives these are is set in a local file that is never committed (it names the
+# drives by serial number):
+#   ~/.config/anchorage-vm/drives    (or the file named by $ANCHORAGE_DRIVES)
+#     LINGAMES=/dev/disk/by-id/ata-<model>_<serial>
+#     WINDOWS=/dev/disk/by-id/nvme-<model>_<serial>
+#     # optional, if the serial isn't the last "_" part of the name:
+#     LINGAMES_SERIAL=<serial>
+#     WINDOWS_SERIAL=<serial>
+# `ls -l /dev/disk/by-id/` lists the names (use the ones without -partN).
 #
 #   tests/vm/realdrives.sh status   what is attached, and whether this computer uses them
 #   tests/vm/realdrives.sh attach   add both to the VM (VM must be shut off)
@@ -20,17 +30,38 @@
 #  * The VM boots from its own disk only (boot order); the Windows disk is never booted.
 #  * The VM runs as you (qemu:///session), so you need read-write access to the two disks.
 #    Grant it for these two only, until the next restart (never via the `disk` group):
-#      sudo setfacl -m u:$USER:rw /dev/disk/by-id/<both ids below>
+#      sudo setfacl -m u:$USER:rw <both paths from the drives file>
 #    and remove it afterwards with `sudo setfacl -x u:$USER <same paths>`.
 set -euo pipefail
 
 CONN=qemu:///session
 VM=anchorage-test
-LINGAMES=/dev/disk/by-id/ata-Samsung_SSD_870_QVO_2TB_S5VWNJ0RA03814T
-WINDOWS=/dev/disk/by-id/nvme-Samsung_SSD_980_PRO_2TB_S6B0NL0W222630H
+DRIVES=${ANCHORAGE_DRIVES:-$HOME/.config/anchorage-vm/drives}
+
+# Reads KEY=value from the drives file (not sourced: it's data, not a script).
+conf() { [ -r "$DRIVES" ] && sed -n "s/^$1=//p" "$DRIVES" | tail -1 | tr -d '"'"'"; }
+drive() { # drive <KEY>: a /dev/disk/by-id path, checked
+  local v
+  v=$(conf "$1")
+  if [ -z "$v" ]; then
+    echo "$1 is not set in $DRIVES (see the top of $0 for the format)." >&2
+    exit 2
+  fi
+  if ! [[ "$v" =~ ^/dev/disk/by-id/[A-Za-z0-9._:-]+$ ]] || [[ "$v" =~ -part[0-9]+$ ]]; then
+    echo "$1 in $DRIVES must be a whole drive in /dev/disk/by-id/ (not a -partN), got: $v" >&2
+    exit 2
+  fi
+  echo "$v"
+}
+LINGAMES=$(drive LINGAMES)
+WINDOWS=$(drive WINDOWS)
 # Target names inside the VM's configuration (sda is the VM's CD-ROM).
 declare -A TARGET=([$LINGAMES]=sdb [$WINDOWS]=sdc)
-declare -A SERIAL=([$LINGAMES]=S5VWNJ0RA03814T [$WINDOWS]=S6B0NL0W222630H)
+# The real serial, so the drive looks like the same hardware inside the VM.
+declare -A SERIAL=([$LINGAMES]=$(conf LINGAMES_SERIAL) [$WINDOWS]=$(conf WINDOWS_SERIAL))
+for d in "$LINGAMES" "$WINDOWS"; do
+  [ -n "${SERIAL[$d]}" ] || SERIAL[$d]=${d##*_}
+done
 
 virsh_() { virsh -c "$CONN" "$@"; }
 state() { virsh_ domstate "$VM" 2>/dev/null | head -1; }
