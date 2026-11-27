@@ -10,9 +10,9 @@ line, checks it, backs up the old file and test-mounts the result. Every option 
 the catalogue covers about 390 mount options for 21 file systems, including SMB and NFS.
 
 > **Status: alpha (technical preview).** The core works and is tested heavily, including
-> against real drives in a test VM, but it has not been released or packaged yet. Network
-> shares and desktop integration are still to come (see [Roadmap](#roadmap)). Try it in a
-> virtual machine, not on a computer you depend on.
+> against real drives and real file servers in a test VM, but it has not been released or
+> packaged yet. Server discovery, "mount on login" and desktop integration are still to come
+> (see [Roadmap](#roadmap)). Try it in a virtual machine, not on a computer you depend on.
 
 ## What works today
 
@@ -50,6 +50,23 @@ the catalogue covers about 390 mount options for 21 file systems, including SMB 
 - When a drive is in use, Anchorage names the programs using it and offers Try Again.
 - Mounts that are opened on first access go through systemd, so it keeps watching the folder.
 
+**Network shares**
+- **Connect to Server…**: type a server's name or address (`nas.local`, `smb://nas`,
+  `//nas/share`, `nas:/export`) to list its SMB shares (with a login when needed) and NFS
+  exports, including which NFS versions it offers.
+- Add a share to fstab through the editor, or mount it at a folder with **Mount At…**. For
+  NFS, pick a version or leave it on Automatic; Anchorage warns if the server doesn't offer
+  the chosen one.
+- **Saved logins**: SMB passwords go into a root-only file
+  (`/etc/anchorage/credentials/<you>-<server>-<user>`), never into `/etc/fstab`, which every
+  user can read. Standard users can only use their own saved logins.
+- Passwords already typed into `/etc/fstab` are flagged for driveadmins and administrators,
+  with **Move to a Safe File**; once moved, they are removed from every backup too.
+- Missing `cifs-utils` or NFS tools: **Install** through PackageKit, or copy the right
+  command for apt, dnf, zypper or pacman.
+- Mount errors are explained in plain language (NFS version not offered, access refused,
+  wrong SMB login).
+
 **Backups and settings**
 - A backup is made before every change (the newest 10 are kept; adjustable from 1 to 100).
 - The Backups page compares the current file with any backup **side by side**: red for lines a
@@ -66,7 +83,8 @@ the catalogue covers about 390 mount options for 21 file systems, including SMB 
   every request again: who may change system entries, where mount points may go (protected
   locations such as `/etc`, `/usr` or `/boot` are refused or need typed confirmation),
   which folders may be shown elsewhere, and that the file didn't change since you opened it.
-- **It only ever writes fixed files**: `/etc/fstab`, its backups and `/etc/anchorage/config`.
+- **It only ever writes fixed files**: `/etc/fstab`, its backups, `/etc/anchorage/config` and
+  saved logins in `/etc/anchorage/credentials/` (root only).
   Writes are atomic, folders are created without following symbolic links, and no shell
   is ever used.
 - Permission tiers (see [`docs/SPEC.md`](docs/SPEC.md) §4):
@@ -84,10 +102,9 @@ the catalogue covers about 390 mount options for 21 file systems, including SMB 
 ## Roadmap
 
 1. A hands-on pass in a real Plasma session (in progress).
-2. **Network shares**: finding servers (mDNS, WS-Discovery), listing their shares, SMB
-   passwords kept in KWallet or root-only credential files, offering to install `cifs-utils`.
-3. **"Mount on login"** for ordinary users, and per-drive "allow users to mount without a
-   password".
+2. **"Mount on login"** for ordinary users (passwords in KWallet), and per-drive "allow users
+   to mount without a password".
+3. **Finding servers** on the network (mDNS, WS-Discovery).
 4. **Desktop integration**: Dolphin right-click menus and a Disks & Devices action.
 5. **Packaging**: a `.deb` for Kubuntu and a setup script for the `driveadmins` and `netmount`
    groups. The final name is settled before the first release.
@@ -132,7 +149,9 @@ Nothing in the test suite touches the real `/etc/fstab` or mounts of the compute
   option on 14 file systems (about 1,460 mounts).
 - **In a test VM with real password prompts**: permissions (`tests/vm/e2e.sh`), the editor,
   mounting and a reboot (`tests/vm/editor.sh`), SMB and NFS options against real servers
-  (`tests/vm/network.sh`), and real drives attached to the VM (`tests/vm/realdrives_test.sh`).
+  (`tests/vm/network.sh`), browsing, saving logins and mounting shares against Samba and NFS
+  servers plus a real NAS (`tests/vm/shares.sh`), and real drives attached to the VM
+  (`tests/vm/realdrives_test.sh`).
 
 These tests have corrected the option catalogue for kernel 7.0 and `mount.cifs`, and found
 real-world surprises that Anchorage now handles: `mount` reporting success for a missing
