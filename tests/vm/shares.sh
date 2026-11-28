@@ -23,8 +23,12 @@ step "Resetting the VM to the clean base image"
 step "Installing Samba, the NFS server and Anchorage in the VM"
 "$vm" deps
 "$vm" ssh -o BatchMode=yes 'set -e
-  sudo env DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null
-  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q samba nfs-kernel-server cifs-utils >/dev/null 2>&1
+  if command -v dnf >/dev/null; then
+    sudo dnf -q -y install samba nfs-utils cifs-utils >/dev/null 2>&1
+  else
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q samba nfs-kernel-server cifs-utils >/dev/null 2>&1
+  fi
   cmake -S ~/src -B ~/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr \
         -DBUILD_TESTING=OFF -DANCHORAGE_E2E=ON >/dev/null
   cmake --build ~/build | tail -1

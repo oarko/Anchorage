@@ -4,6 +4,8 @@
 #
 #   packaging/build-deb.sh [out-dir]     default out-dir: build/deb
 #
+# Upload to the GitHub release: anchorage_<version with - for ~>_amd64.deb and SHA256SUMS.
+#
 # The version comes from debian/changelog (dch -v 0.9.0~beta2 to make the next one) and must
 # match project(VERSION) + ANCHORAGE_VERSION_SUFFIX in CMakeLists.txt, or the build stops.
 set -euo pipefail
@@ -31,5 +33,13 @@ docker run --rm -v "$out:/out" -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" ubu
   lintian --info --pedantic --display-experimental anchorage_*.changes | tee lintian.log || true
 '
 rm -f "$out/source.tar"
+
+# GitHub turns "~" in uploaded file names into ".", so the release gets a copy named like the
+# tag (0.9.0~beta1 -> anchorage_0.9.0-beta1_amd64.deb), with SHA256SUMS for that name.
+(cd "$out" && for f in anchorage_*_amd64.deb; do
+  r=${f//\~/-}
+  [ "$r" = "$f" ] || cp "$f" "$r"
+  sha256sum "$r" > SHA256SUMS
+done)
 echo
 ls -l "$out"

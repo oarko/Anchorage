@@ -44,6 +44,9 @@ const QStringList &blockedTrees()
         QStringLiteral("/etc/samba"),    QStringLiteral("/etc/security"), QStringLiteral("/etc/ssh"),
         QStringLiteral("/etc/sudoers.d"), QStringLiteral("/etc/systemd"), QStringLiteral("/var/lib/apt"),
         QStringLiteral("/var/lib/dpkg"), QStringLiteral("/var/lib/polkit-1"), QStringLiteral("/var/lib/sudo"),
+        // Package sources and databases on Fedora (and apt's sources), and SELinux policy.
+        QStringLiteral("/etc/apt"),      QStringLiteral("/etc/dnf"),     QStringLiteral("/etc/yum.repos.d"),
+        QStringLiteral("/etc/selinux"),  QStringLiteral("/var/lib/rpm"), QStringLiteral("/var/lib/dnf"),
     };
     return list;
 }

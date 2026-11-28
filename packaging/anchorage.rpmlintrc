@@ -1,0 +1,5 @@
+# rpmlint filters for Anchorage (packaging/build-rpm.sh passes this file).
+# Technical words, not spelling mistakes: the file name and the two group names.
+addFilter(r"spelling-error \('(fstab|driveadmins|netmount)'")
+# Built from a local tarball made by build-rpm.sh, not downloaded.
+addFilter(r"invalid-url Source0:")

@@ -12,6 +12,9 @@
 #   tests/vm/vm.sh deps      install build dependencies added since the base image was made
 #   tests/vm/vm.sh console   serial console (boot messages, emergency shell); Ctrl+] exits
 #
+# ANCHORAGE_VM=fedora selects the Fedora VM (made by tests/vm/fedora-install.sh) instead of
+# the Kubuntu one: anchorage-fedora, SSH on 127.0.0.1:2223, fedora-base.qcow2/fedora-test.qcow2.
+#
 # Disks: anchorage-base.qcow2 is the clean, read-only install (plus its UEFI settings
 # anchorage-base_VARS.fd). The VM runs on anchorage-test.qcow2, a thin overlay on top of
 # it; `reset` replaces the overlay and UEFI settings with fresh copies.
@@ -22,9 +25,12 @@
 set -euo pipefail
 
 CONN=qemu:///session
-VM=anchorage-test
-PORT=2222
 DIR="$HOME/.local/share/anchorage-vm"
+case "${ANCHORAGE_VM:-kubuntu}" in
+  kubuntu) VM=anchorage-test PORT=2222 BASE=anchorage-base OVERLAY=anchorage-test ;;
+  fedora) VM=anchorage-fedora PORT=2223 BASE=fedora-base OVERLAY=fedora-test ;;
+  *) echo "ANCHORAGE_VM must be kubuntu or fedora" >&2; exit 2 ;;
+esac
 KEY="$DIR/id_ed25519"
 NVRAM="$HOME/.config/libvirt/qemu/nvram/${VM}_VARS.fd"
 
@@ -100,9 +106,9 @@ case "${1:-status}" in
       virsh_ destroy "$VM" >/dev/null # no need to shut down cleanly: everything is discarded
     fi
     cleanup_helpers
-    rm -f "$DIR/anchorage-test.qcow2"
-    qemu-img create -q -f qcow2 -b "$DIR/anchorage-base.qcow2" -F qcow2 "$DIR/anchorage-test.qcow2"
-    install -m 600 "$DIR/anchorage-base_VARS.fd" "$NVRAM"
+    rm -f "$DIR/$OVERLAY.qcow2"
+    qemu-img create -q -f qcow2 -b "$DIR/$BASE.qcow2" -F qcow2 "$DIR/$OVERLAY.qcow2"
+    install -m 600 "$DIR/${BASE}_VARS.fd" "$NVRAM"
     echo "$VM reset to the clean base image."
     ;;
   status)
@@ -113,10 +119,15 @@ case "${1:-status}" in
     # Build dependencies added after the base image was made (installed per run, so the
     # base image stays untouched). Idempotent and quick when already there.
     "$0" ssh -o BatchMode=yes 'missing=""
-      for p in pkg-config libsmbclient-dev; do dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"; done
-      if [ -n "$missing" ]; then
-        sudo env DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null
-        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q $missing >/dev/null
+      if command -v dnf >/dev/null; then
+        for p in pkgconf-pkg-config libsmbclient-devel; do rpm -q "$p" >/dev/null 2>&1 || missing="$missing $p"; done
+        [ -z "$missing" ] || sudo dnf -q -y install $missing >/dev/null
+      else
+        for p in pkg-config libsmbclient-dev; do dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"; done
+        if [ -n "$missing" ]; then
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q $missing >/dev/null
+        fi
       fi'
     ;;
   ssh)

@@ -22,6 +22,9 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VM = os.path.join(HERE, "vm.sh")
+# ANCHORAGE_VM=fedora runs the same scenarios in the Fedora VM (see vm.sh).
+VM_NAME = {"fedora": "anchorage-fedora"}.get(os.environ.get("ANCHORAGE_VM", ""), "anchorage-test")
+# "sudo" stands for the administrator group: sudo on Debian/Ubuntu, wheel on Fedora.
 USERS = {"alice": [], "nora": ["netmount"], "dana": ["driveadmins"], "sam": ["sudo"]}
 PASSWORDS = {name: secrets.token_urlsafe(18) for name in USERS}
 WRONG = "definitely-not-the-password"
@@ -66,13 +69,18 @@ def change_root_options(content, extra):
     return "".join(out)
 
 
+def admin_group():
+    return "sudo" if ssh("getent group sudo >/dev/null && echo yes").stdout.strip() == "yes" else "wheel"
+
+
 def create_users():
+    admin = admin_group()
     script = ["set -e", "getent group driveadmins >/dev/null || sudo groupadd driveadmins",
               "getent group netmount >/dev/null || sudo groupadd netmount"]
     for name, groups in USERS.items():
         script.append(f"id {name} >/dev/null 2>&1 || sudo useradd -m -s /bin/bash {name}")
         for g in groups:
-            script.append(f"sudo usermod -aG {g} {name}")
+            script.append(f"sudo usermod -aG {admin if g == 'sudo' else g} {name}")
     r = ssh("\n".join(script))
     assert r.returncode == 0, r.stderr
     secret = "".join(f"{n}:{p}\n" for n, p in PASSWORDS.items())
@@ -103,7 +111,9 @@ SCREEN = (
 
 class Console:
     def __init__(self):
-        r = ssh(f"sudo chvt {TTY}")
+        # Fedora doesn't start a login prompt on a console just because it is switched to.
+        # Kernel messages on the console (Fedora boots without "quiet") would garble the screen.
+        r = ssh(f"sudo dmesg -n 1 && sudo systemctl start getty@tty{TTY} && sudo chvt {TTY}")
         assert r.returncode == 0, r.stderr
         self.consumed = {}
 
@@ -114,7 +124,7 @@ class Console:
         for ch in text:
             key, shift = KEYS[ch]
             codes = ["KEY_LEFTSHIFT", key] if shift else [key]
-            subprocess.run(["virsh", "-c", "qemu:///session", "send-key", "anchorage-test", "--holdtime", "30", *codes],
+            subprocess.run(["virsh", "-c", "qemu:///session", "send-key", VM_NAME, "--holdtime", "30", *codes],
                            check=True, capture_output=True)
 
     def expect(self, patterns, timeout=60):
@@ -204,6 +214,18 @@ results = []
 def check(name, ok, detail=""):
     results.append((name, ok, detail))
     print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"\n      {detail}" if detail and not ok else ""))
+
+
+def summary():
+    """Ends a run: on SELinux systems (Fedora), no denials since boot; then the totals."""
+    if ssh("command -v ausearch >/dev/null && echo yes").stdout.strip() == "yes":
+        denials = ssh("sudo ausearch -m AVC,USER_AVC,SELINUX_ERR -ts boot -i 2>/dev/null | grep -E '^type=(AVC|USER_AVC|SELINUX_ERR)' || true").stdout
+        relevant = [l for l in denials.splitlines() if re.search(r"anchorage|mount|smb|cifs|nfs|fstab|polkit|kauth", l)]
+        check("SELinux denied nothing Anchorage did", not relevant, "\n      ".join(relevant[:8]))
+    failed = [r for r in results if not r[1]]
+    ssh("sudo chvt 1")
+    print(f"\n{len(results) - len(failed)}/{len(results)} scenarios passed")
+    return 1 if failed else 0
 
 
 def main():
@@ -322,10 +344,7 @@ def main():
           f"{res} before={count_before} after={len(backups())}")
     serial.logout()
 
-    failed = [r for r in results if not r[1]]
-    ssh("sudo chvt 1")
-    print(f"\n{len(results) - len(failed)}/{len(results)} scenarios passed")
-    return 1 if failed else 0
+    return summary()
 
 
 if __name__ == "__main__":
