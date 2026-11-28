@@ -21,7 +21,7 @@ import time
 
 import subprocess
 
-from e2e_scenarios import PASSWORDS, VM, Console, backups, check, create_users, put_file, results, ssh, vm_fstab
+from e2e_scenarios import PASSWORDS, VM, Console, backups, check, create_users, put_file, results, ssh, summary, vm_fstab
 
 IMAGES = {  # label: (mkfs, size)
     "E2EBOOT": ("mkfs.ext4 -q -F -L E2EBOOT", "64M"),
@@ -309,10 +309,7 @@ def main():
     check("restoring the backup brings it back exactly", res.startswith("RESULT ok") and vm_fstab() == before, res)
     con.logout()
 
-    failed = [r for r in results if not r[1]]
-    ssh("sudo chvt 1")
-    print(f"\n{len(results) - len(failed)}/{len(results)} scenarios passed")
-    return 1 if failed else 0
+    return summary()
 
 
 if __name__ == "__main__":

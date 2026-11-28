@@ -55,6 +55,20 @@ Anything marked **[OPEN]** there is not yet agreed: ask the user, don't assume.
   (~15 min) tests install, e2e scenarios against the packaged helper, upgrade and the
   uninstall rules (repacking the .deb for the upgrade/release cases). Groups come from
   `debian/anchorage.sysusers`; maintainer scripts get the beta flag from debian/rules.
+- **Fedora (in progress 2026-11-27)**: `packaging/build-rpm.sh` (fedora:45/44 containers);
+  Fedora KDE test VM `anchorage-fedora` (SSH 2223) made once by `tests/vm/fedora-install.sh`
+  (kickstart; SELinux enforcing; test user password only in
+  `~/.local/share/anchorage-vm/fedora-password`). Select it with `ANCHORAGE_VM=fedora` for
+  vm.sh and the scenario runners; `tests/vm/package-rpm.sh` tests the .rpm. Scenario runs
+  end with `summary()`, which fails on SELinux AVC denials. Fedora's admin group is `wheel`.
+  Fedora VM lessons (2026-11-28): the base image must have booted once (SSH host keys are
+  made at first boot; otherwise every reset changes them); `plasma-setup.service` must be
+  disabled (the first-run wizard takes tty1 at every boot); a console only gets a getty
+  when started (`systemctl start getty@tty3`); without `quiet`, kernel messages garble
+  the console (`dmesg -n 1`); the NFS test server needs `rpcbind` and `exportfs -ra`
+  before `nfs-server` starts (rpc.mountd quits without /var/lib/nfs/etab); Samba folders
+  need the `samba_share_t` label. Results: .rpm 23/23, editor 51/51, shares 24/24 (NAS
+  included), no SELinux denials.
 - SMB share *creation* is a planned phase 2 feature (SPEC §16); keep v1 scope to mounting.
 - Ask the user before starting implementation.
 

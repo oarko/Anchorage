@@ -79,6 +79,11 @@ private Q_SLOTS:
         QTest::newRow("usr local") << QStringLiteral("/usr/local/bin") << Zone::Blocked;
         QTest::newRow("boot efi") << QStringLiteral("/boot/efi") << Zone::Blocked;
         QTest::newRow("dpkg") << QStringLiteral("/var/lib/dpkg/info") << Zone::Blocked;
+        QTest::newRow("rpm") << QStringLiteral("/var/lib/rpm") << Zone::Blocked;
+        QTest::newRow("dnf") << QStringLiteral("/var/lib/dnf/history") << Zone::Blocked;
+        QTest::newRow("yum repos") << QStringLiteral("/etc/yum.repos.d") << Zone::Blocked;
+        QTest::newRow("apt sources") << QStringLiteral("/etc/apt/sources.list.d") << Zone::Blocked;
+        QTest::newRow("selinux") << QStringLiteral("/etc/selinux/targeted") << Zone::Blocked;
         QTest::newRow("run other") << QStringLiteral("/run/systemd") << Zone::Blocked;
         QTest::newRow("run media user") << QStringLiteral("/run/media/oarko") << Zone::Blocked;
         QTest::newRow("prefix trick") << QStringLiteral("/etc/sshkeys") << Zone::Override; // not /etc/ssh

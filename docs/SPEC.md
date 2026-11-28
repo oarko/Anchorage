@@ -446,6 +446,18 @@ Agreed 2026-11-26:
   the packaged helper, an upgrade, and the beta and release uninstall rules. The groups are
   made with systemd-sysusers (`debian/anchorage.sysusers`). The changelog's distribution is
   the Ubuntu series (`resolute` for 26.04).
+- **Fedora (agreed 2026-11-27)**: an RPM too (`packaging/anchorage.spec`, built by
+  `packaging/build-rpm.sh` in clean `fedora:45` and `fedora:44` containers, rpmlint clean),
+  for the current and the previous Fedora release, attached to the GitHub release (no COPR
+  yet). RPM can't ask questions on removal, so erasing keeps `/etc/anchorage` for betas and
+  releases alike and prints how to delete it; the beta Suggests `cifs-utils`/`nfs-utils`,
+  a release Recommends them. Tested in a Fedora KDE VM with SELinux enforcing
+  (`tests/vm/fedora-install.sh`, `ANCHORAGE_VM=fedora`, `tests/vm/package-rpm.sh`); every
+  scenario run there also fails on SELinux denials. The repository goes public once the
+  Fedora package passes, together with the release.
+- **Release file names**: GitHub turns `~` into `.` in uploaded names, so release assets use
+  `-` (`anchorage_0.9.0-beta1_amd64.deb`); the build scripts make those copies and
+  `SHA256SUMS`.
 - **Icon**: a fouled anchor in KDE Breeze style (flat, simple shapes, readable at 16 px),
   SVG, drawn first by Claude for review; if it isn't right, the user tries Recraft. A
   ship's-side view with the anchor in its hawsepipe may serve as larger artwork (README /

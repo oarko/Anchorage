@@ -15,7 +15,7 @@ import re
 import sys
 import time
 
-from e2e_scenarios import PASSWORDS, Console, check, create_users, results, ssh, vm_fstab
+from e2e_scenarios import PASSWORDS, Console, check, create_users, results, ssh, summary, vm_fstab
 from editor_scenarios import as_user, fs_at, reboot
 
 LINGAMES = "16ee7fab-7ac0-4e9a-8bb9-ba953c4cdffe"
@@ -161,10 +161,7 @@ def main():
     con.logout()
     check("the test folders are removed from both real drives", gone == "gone", gone)
 
-    failed = [r for r in results if not r[1]]
-    ssh("sudo chvt 1")
-    print(f"\n{len(results) - len(failed)}/{len(results)} scenarios passed")
-    return 1 if failed else 0
+    return summary()
 
 
 if __name__ == "__main__":

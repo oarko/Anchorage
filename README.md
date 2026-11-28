@@ -113,30 +113,35 @@ the catalogue covers about 390 mount options for 21 file systems, including SMB 
 
 The full design, including every agreed decision, is in [`docs/SPEC.md`](docs/SPEC.md).
 
-## Installing the beta (Kubuntu 26.04)
+## Installing the beta (Kubuntu 26.04, Fedora 45 and 44)
 
 > **This is a beta.** Anchorage changes system files such as `/etc/fstab`, and a mistake there
 > can stop a computer from starting. Try it in a virtual machine or on a computer you don't
 > depend on, never on production systems. It warns you about this at every start (you can
 > turn that off for each version).
 
-Download `anchorage_0.9.0~beta1_amd64.deb` from the GitHub release and install it with apt
-(which also installs the KDE libraries it needs):
+Download the package for your system (and `SHA256SUMS`) from the
+[GitHub release](https://github.com/oarko/Anchorage/releases/tag/v0.9.0-beta1) and install it
+with your package manager, which also installs the KDE libraries it needs:
 
 ```sh
-sudo apt install ./anchorage_0.9.0~beta1_amd64.deb
+sha256sum -c --ignore-missing SHA256SUMS                # optional: check the download
+
+sudo apt install ./anchorage_0.9.0-beta1_amd64.deb      # Kubuntu / Ubuntu 26.04
+sudo dnf install ./anchorage-0.9.0-beta1-1.fc45.x86_64.rpm   # Fedora 45 (fc44: Fedora 44)
 ```
 
-Then open **Anchorage** from the application menu. As an administrator (a member of `sudo`) you
-can do everything with your own password. The package creates two empty groups for everyone
+Then open **Anchorage** from the application menu. As an administrator (a member of `sudo`, or
+`wheel` on Fedora) you can do everything with your own password. The package creates two empty groups for everyone
 else:
 
 ```sh
-sudo adduser alice netmount      # may add network shares and save logins for them
-sudo adduser alice driveadmins   # may change everything (effectively root: be careful)
+sudo usermod -aG netmount alice      # may add network shares and save logins for them
+sudo usermod -aG driveadmins alice   # may change everything (effectively root: be careful)
 ```
 
-They need to log out and in again first.
+They need to log out and in again first. On Fedora, SELinux stays on: Anchorage is tested
+with it enforcing.
 
 **Reporting a problem:** the beta logs what it does. Start it from a terminal (`anchorage`) to
 see the app's lines, and `journalctl -b | grep anchorage` shows the root helper's. Passwords
@@ -148,6 +153,8 @@ shares that Anchorage added keep working without it. The beta asks whether to de
 `/etc/anchorage` too (saved logins, backups, settings); it suggests keeping it when shares
 still use a saved login there, because they stop mounting without it. A release keeps the
 folder on remove, and `purge` deletes only the saved logins that nothing uses any more.
+On Fedora (`sudo dnf remove anchorage`), the package can't ask, so it always keeps
+`/etc/anchorage` and says how to delete it.
 
 ## Building (Kubuntu 26.04)
 
@@ -172,7 +179,8 @@ privileged helper and its polkit rules have to be installed for that
 machine.
 
 To build the `.deb` in a clean Ubuntu 26.04 container (needs only Docker) and check it with
-lintian: `packaging/build-deb.sh` (output in `build/deb`). The version comes from
+lintian: `packaging/build-deb.sh` (output in `build/deb`). The Fedora `.rpm`s, in clean
+Fedora 45 and 44 containers and checked with rpmlint: `packaging/build-rpm.sh` (`build/rpm`). The version comes from
 `debian/changelog` and must match `CMakeLists.txt`; a `~beta` or `~rc` version is always a
 beta build.
 
@@ -192,7 +200,10 @@ Nothing in the test suite touches the real `/etc/fstab` or mounts of the compute
   (`tests/vm/network.sh`), browsing, saving logins and mounting shares against Samba and NFS
   servers plus a real NAS (`tests/vm/shares.sh`), and real drives attached to the VM
   (`tests/vm/realdrives_test.sh`), and the `.deb`: install, permissions against the packaged
-  helper, upgrade, and the uninstall rules (`tests/vm/package.sh`).
+  helper, upgrade, and the uninstall rules (`tests/vm/package.sh`). The same suites run in a
+  Fedora KDE VM with SELinux enforcing (`ANCHORAGE_VM=fedora`, made once by
+  `tests/vm/fedora-install.sh`; `.rpm` test: `tests/vm/package-rpm.sh`), and fail on any
+  SELinux denial.
 
 These tests have corrected the option catalogue for kernel 7.0 and `mount.cifs`, and found
 real-world surprises that Anchorage now handles: `mount` reporting success for a missing

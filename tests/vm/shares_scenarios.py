@@ -17,7 +17,7 @@ import secrets
 import sys
 import time
 
-from e2e_scenarios import PASSWORDS, Console, add_line, backups, check, create_users, put_file, results, ssh, vm_fstab
+from e2e_scenarios import PASSWORDS, Console, add_line, backups, check, create_users, put_file, results, ssh, summary, vm_fstab
 from editor_scenarios import fs_at
 
 SMB_USER = "smbtest"
@@ -47,7 +47,15 @@ def setup_servers():
             "id smbtest >/dev/null 2>&1 || sudo useradd -M -s /usr/sbin/nologin smbtest\n"
             "sudo tee /etc/samba/smb.conf >/dev/null <<'EOF'\n" + conf + "EOF\n"
             "echo '/srv/anchorage-nfs 127.0.0.1(rw,no_subtree_check,insecure)' | sudo tee /etc/exports >/dev/null\n"
-            "sudo systemctl restart smbd nfs-server\nsudo exportfs -ra\n")
+            # Fedora: SELinux lets Samba share only folders labelled for it.
+            "if command -v chcon >/dev/null && selinuxenabled 2>/dev/null; then\n"
+            "  sudo chcon -t samba_share_t /srv/anchorage-smb /srv/anchorage-public /srv/anchorage-public/readme.txt\n"
+            "fi\n"
+            # Listing NFS exports (showmount) needs rpcbind, which Fedora doesn't start by default,
+            # and rpc.mountd quits at its first start unless exportfs has made /var/lib/nfs/etab.
+            "sudo systemctl start rpcbind\nsudo exportfs -ra\n"
+            "if systemctl cat smb.service >/dev/null 2>&1; then sudo systemctl restart smb nfs-server; "
+            "else sudo systemctl restart smbd nfs-server; fi\nsudo exportfs -ra\n")
     assert r.returncode == 0, r.stderr
     r = ssh(f"sudo smbpasswd -s -a {SMB_USER} >/dev/null", stdin=f"{SMB_PASSWORD}\n{SMB_PASSWORD}\n")
     assert r.returncode == 0, "smbpasswd failed"
@@ -138,7 +146,8 @@ def main():
     # ---- cifs-utils missing: PackageKit installs it ------------------------------------
     con.login("dana")
     con.run("unmount /mnt/e2e-smb", "dana", PASSWORDS["dana"])
-    ssh("sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y -q cifs-utils >/dev/null 2>&1")
+    ssh("if command -v dnf >/dev/null; then sudo dnf -q -y remove cifs-utils; "
+        "else sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y -q cifs-utils; fi >/dev/null 2>&1")
     check("cifs-utils removed for the test", ssh("test -e /usr/sbin/mount.cifs && echo yes").stdout.strip() != "yes")
     res, _ = con.run("mount-entry /mnt/e2e-smb", "dana", PASSWORDS["dana"])
     check("mounting an SMB share without cifs-utils fails", res.startswith("RESULT error"), res)
@@ -184,10 +193,7 @@ def main():
         con.run("unmount /mnt/nas-nfs", "dana", PASSWORDS["dana"])
     con.logout()
 
-    failed = [r for r in results if not r[1]]
-    ssh("sudo chvt 1")
-    print(f"\n{len(results) - len(failed)}/{len(results)} scenarios passed")
-    return 1 if failed else 0
+    return summary()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,60 @@
+# Kickstart for the Fedora test VM (tests/vm/fedora-install.sh fills in @PASSWORD_HASH@
+# and @SSH_KEY@; the filled-in copy is deleted after the install).
+# Like the Kubuntu VM: KDE Plasma, btrfs, UEFI, user "test" with SSH key login and
+# passwordless sudo, serial console, Anchorage's build dependencies. SELinux stays
+# enforcing, as on a real Fedora system.
+text
+lang en_US.UTF-8
+keyboard us
+timezone UTC --utc
+network --bootproto=dhcp --device=link --activate --hostname=anchorage-fedora
+url --mirrorlist=https://mirrors.fedoraproject.org/mirrorlist?repo=fedora-@RELEASE@&arch=x86_64
+repo --name=updates --mirrorlist=https://mirrors.fedoraproject.org/mirrorlist?repo=updates-released-f@RELEASE@&arch=x86_64
+rootpw --lock
+user --name=test --groups=wheel --iscrypted --password=@PASSWORD_HASH@
+sshkey --username=test "@SSH_KEY@"
+zerombr
+clearpart --all --initlabel --disklabel=gpt
+autopart --type=btrfs --nohome
+bootloader --append="console=tty0 console=ttyS0,115200"
+selinux --enforcing
+firewall --enabled --service=ssh
+services --enabled=sshd
+firstboot --disable
+poweroff
+
+%packages
+@^kde-desktop-environment
+openssh-server
+sudo
+rsync
+python3
+kbd
+cifs-utils
+nfs-utils
+# Anchorage's build dependencies (the tests build the client and helper in the VM).
+cmake
+ninja-build
+gcc-c++
+extra-cmake-modules
+pkgconf-pkg-config
+qt6-qtbase-devel
+kf6-kcoreaddons-devel
+kf6-ki18n-devel
+kf6-kxmlgui-devel
+kf6-kwidgetsaddons-devel
+kf6-kauth-devel
+kf6-kitemviews-devel
+kf6-kcolorscheme-devel
+kf6-solid-devel
+libsmbclient-devel
+%end
+
+%post
+echo "test ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/90-anchorage-test
+chmod 440 /etc/sudoers.d/90-anchorage-test
+systemctl set-default graphical.target
+# The first-run "Plasma Setup" wizard would run at every boot of the reset VM and take
+# over the screen; the test user already exists.
+systemctl disable plasma-setup.service
+%end
